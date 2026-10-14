@@ -159,6 +159,34 @@ func TestRetryClientRetryLimits(t *testing.T) {
 	}
 }
 
+func TestRetryClientPostServiceUnavailableWithRetryAfter(t *testing.T) {
+	const payload = `{"owner":"team","name":"web"}`
+	server, bodies := serveSequence(t,
+		stubResponse{status: http.StatusServiceUnavailable, header: map[string]string{"Retry-After": "2"}, body: `{"error":{"code":"upstream_error","message":"source control"}}`},
+		stubResponse{status: http.StatusCreated, body: `{"id":"env-1","owner":"team","name":"web","repos":[],"createdAt":"t","updatedAt":"t"}`},
+	)
+	var waits waitRecorder
+	client := &retryClient{next: server.Client(), wait: waits.wait}
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/environments", strings.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Do() error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	if n := len(bodies()); n != 2 {
+		t.Fatalf("server saw %d requests, want 2", n)
+	}
+	if len(waits) != 1 || waits[0] < 2*time.Second || waits[0] > 2400*time.Millisecond {
+		t.Fatalf("waits = %v, want about 2s", waits)
+	}
+}
+
 func TestRetryClientReturnsResponseWithoutRetrying(t *testing.T) {
 	tests := []struct {
 		name       string

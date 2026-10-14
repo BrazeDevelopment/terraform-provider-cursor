@@ -95,7 +95,7 @@ Request and response types for the Cloud Agents API are generated from a pinned 
 
 `Configure` today requires `token` and, when the value starts with `key_` or `crsr_`, exchanges it for a session token before any client is built. The Cloud Agents API uses the raw key as Basic auth. A session token cannot be that key. Capture the raw `token` for the `api_key` default before the exchange.
 
-`token` stays required for stacks that manage automations. When a stack sets `api_key`, `team_api_key`, or `pool_api_key` and does not manage automations, `token` is optional. Existing automation stacks already set `token`, so this does not change their plans.
+`token` stays required for stacks that manage automations. When a stack sets `api_key`, `team_api_key`, `organization_api_key`, or `pool_api_key` and does not manage automations, `token` is optional. Existing automation stacks already set `token`, so this does not change their plans.
 
 | Attribute | Environment variable | Used by | Notes |
 | --- | --- | --- | --- |
