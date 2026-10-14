@@ -59,7 +59,7 @@ func (p *cursorProvider) Schema(_ context.Context, _ provider.SchemaRequest, res
 			"token": schema.StringAttribute{
 				Optional:    true,
 				Sensitive:   true,
-				Description: "Auth token for the Cursor Automations and Origin APIs. Required when the configuration manages automations or Origin resources. A raw key_ or crsr_ value is exchanged for a session token. Can also be set via CURSOR_TOKEN. Optional when api_key, team_api_key, or pool_api_key is set and the stack does not manage automations.",
+				Description: "Auth token for the Cursor Automations and Origin APIs. Required when the configuration manages automations or Origin resources. A raw key_ or crsr_ value is exchanged for a session token. Can also be set via CURSOR_TOKEN. Optional when api_key, team_api_key, organization_api_key, or pool_api_key is set and the stack does not manage automations.",
 			},
 			"endpoint": schema.StringAttribute{
 				Optional:    true,
@@ -135,10 +135,10 @@ func (p *cursorProvider) Configure(ctx context.Context, req provider.ConfigureRe
 	orgKey := getStringValue(config.OrganizationAPIKey, envOrgAPIKey)
 	orgID := getStringValue(config.OrganizationID, envOrgID)
 	apiKey, poolKey := resolveForkKeys(token, getStringValue(config.APIKey, envAPIKey), getStringValue(config.PoolAPIKey, envPoolAPIKey))
-	if token == "" && apiKey == "" && teamKey == "" && poolKey == "" {
+	if token == "" && apiKey == "" && teamKey == "" && orgKey == "" && poolKey == "" {
 		resp.Diagnostics.AddError(
 			"Missing Cursor API token",
-			fmt.Sprintf("Set the provider \"token\" attribute or the %s environment variable. token is optional when api_key, team_api_key, or pool_api_key is set and the stack does not manage automations.", envToken),
+			fmt.Sprintf("Set the provider \"token\" attribute or the %s environment variable. token is optional when api_key, team_api_key, organization_api_key, or pool_api_key is set and the stack does not manage automations.", envToken),
 		)
 		return
 	}

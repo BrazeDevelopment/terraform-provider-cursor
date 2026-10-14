@@ -16,6 +16,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	dschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/provider"
+	pschema "github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -39,6 +41,94 @@ func TestResolveForkKeysCapturesRawKeyBeforeUse(t *testing.T) {
 	if _, pool := resolveForkKeys("session-token", "", ""); pool != "" {
 		t.Fatalf("session token should not become a pool key, got %q", pool)
 	}
+}
+
+func TestConfigureTreatsOrganizationAPIKeyAsCredential(t *testing.T) {
+	ctx := context.Background()
+	p := &cursorProvider{version: "test"}
+	schemaResp := &provider.SchemaResponse{}
+	p.Schema(ctx, provider.SchemaRequest{}, schemaResp)
+
+	cases := []struct {
+		name    string
+		model   cursorProviderModel
+		envKey  string
+		envVal  string
+		wantErr bool
+		orgKey  string
+	}{
+		{
+			name:   "attribute",
+			model:  cursorProviderModel{OrganizationAPIKey: types.StringValue("org-key"), OrganizationID: types.StringValue("org_1")},
+			orgKey: "org-key",
+		},
+		{
+			name:   "environment",
+			envKey: envOrgAPIKey,
+			envVal: "env-org-key",
+			orgKey: "env-org-key",
+		},
+		{name: "absent", wantErr: true},
+		{
+			name:    "organization id only",
+			model:   cursorProviderModel{OrganizationID: types.StringValue("org_1")},
+			wantErr: true,
+		},
+		{
+			name:    "blank attribute",
+			model:   cursorProviderModel{OrganizationAPIKey: types.StringValue("   ")},
+			wantErr: true,
+		},
+		{
+			name:    "blank environment",
+			envKey:  envOrgAPIKey,
+			envVal:  "  ",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range []string{envToken, envAPIKey, envTeamAPIKey, envOrgAPIKey, envPoolAPIKey, envOrgID} {
+				t.Setenv(key, "")
+			}
+			if tc.envKey != "" {
+				t.Setenv(tc.envKey, tc.envVal)
+			}
+			resp := configureCursor(t, ctx, p, schemaResp.Schema, tc.model)
+			if tc.wantErr {
+				if !resp.Diagnostics.HasError() {
+					t.Fatal("expected missing credential diagnostic")
+				}
+				detail := resp.Diagnostics.Errors()[0].Detail()
+				if !strings.Contains(detail, "organization_api_key") {
+					t.Fatalf("detail = %q", detail)
+				}
+				return
+			}
+			if resp.Diagnostics.HasError() {
+				t.Fatal(resp.Diagnostics)
+			}
+			client, ok := resp.ResourceData.(*apiClient)
+			if !ok {
+				t.Fatalf("resource data = %T", resp.ResourceData)
+			}
+			if client.orgAPIKey != tc.orgKey || client.authHeader != "" {
+				t.Fatalf("orgAPIKey = %q auth = %q", client.orgAPIKey, client.authHeader)
+			}
+		})
+	}
+}
+
+func configureCursor(t *testing.T, ctx context.Context, p *cursorProvider, sch pschema.Schema, model cursorProviderModel) *provider.ConfigureResponse {
+	t.Helper()
+	state := tfsdk.State{Schema: sch, Raw: tftypes.NewValue(sch.Type().TerraformType(ctx), nil)}
+	if diags := state.Set(ctx, model); diags.HasError() {
+		t.Fatal(diags)
+	}
+	resp := &provider.ConfigureResponse{}
+	p.Configure(ctx, provider.ConfigureRequest{Config: tfsdk.Config{Schema: sch, Raw: state.Raw}}, resp)
+	return resp
 }
 
 func TestNormalizeEnvironmentJSON(t *testing.T) {

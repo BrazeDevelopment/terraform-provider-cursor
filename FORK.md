@@ -6,7 +6,7 @@ This repository is a fork of [cursor/terraform-provider-cursor](https://github.c
 
 ### `internal/provider/provider.go`
 
-Registers the fork resources and data sources. Adds `api_key`, `organization_id`, `pool_api_key`, and the `guardrails` block. `token` is optional when `api_key`, `team_api_key`, or `pool_api_key` is set. A raw `key_` or `crsr_` token is copied into the Cloud Agents API key before that token is exchanged for a session token. `pool_api_key` defaults to `api_key` whenever `api_key` is set. The pools API rejects other key types, and there is no reliable prefix that identifies a service-account key.
+Registers the fork resources and data sources. Adds `api_key`, `organization_id`, `pool_api_key`, and the `guardrails` block. `token` is optional when `api_key`, `team_api_key`, `organization_api_key`, or `pool_api_key` is set. A raw `key_` or `crsr_` token is copied into the Cloud Agents API key before that token is exchanged for a session token. `pool_api_key` defaults to `api_key` whenever `api_key` is set. The pools API rejects other key types, and there is no reliable prefix that identifies a service-account key.
 
 Upstream proposal: none yet. Remove this divergence when upstream accepts the same provider configuration.
 

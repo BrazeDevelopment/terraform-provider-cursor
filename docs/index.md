@@ -23,7 +23,7 @@ terraform {
 
 provider "cursor" {
   # Or set the CURSOR_TOKEN environment variable.
-  # Optional when api_key, team_api_key, or pool_api_key is set and the stack does not manage automations.
+  # Optional when api_key, team_api_key, organization_api_key, or pool_api_key is set and the stack does not manage automations.
   token = var.cursor_token
 
   # Cloud Agents API key. A raw key_ or crsr_ token is captured before session exchange and used when api_key is unset.
@@ -62,7 +62,7 @@ provider "cursor" {
 - `organization_id` (String) Public organization ID (org_…). Caller-supplied; it does not prove the organization API key belongs to that organization. Required by Organization API resources. Can also be set via CURSOR_ORGANIZATION_ID.
 - `pool_api_key` (String, Sensitive) Team service-account key for private worker pool resources. The pools API rejects other key types. Defaults to api_key. One key is used for every pool in the team. Can also be set via CURSOR_POOL_API_KEY.
 - `team_api_key` (String, Sensitive) Team Admin API key, sent as HTTP Basic auth (key as username, empty password) to https://api.cursor.com. Used for Origin grants keyed by user_email and for Admin API resources. Model-access writes need models:* or admin:*. Can also be set via CURSOR_TEAM_API_KEY.
-- `token` (String, Sensitive) Auth token for the Cursor Automations and Origin APIs. Required when the configuration manages automations or Origin resources. A raw key_ or crsr_ value is exchanged for a session token. Can also be set via CURSOR_TOKEN. Optional when api_key, team_api_key, or pool_api_key is set and the stack does not manage automations.
+- `token` (String, Sensitive) Auth token for the Cursor Automations and Origin APIs. Required when the configuration manages automations or Origin resources. A raw key_ or crsr_ value is exchanged for a session token. Can also be set via CURSOR_TOKEN. Optional when api_key, team_api_key, organization_api_key, or pool_api_key is set and the stack does not manage automations.
 
 <a id="nestedblock--guardrails"></a>
 ### Nested Schema for `guardrails`

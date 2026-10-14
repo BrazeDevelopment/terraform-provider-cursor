@@ -9,7 +9,7 @@ terraform {
 
 provider "cursor" {
   # Or set the CURSOR_TOKEN environment variable.
-  # Optional when api_key, team_api_key, or pool_api_key is set and the stack does not manage automations.
+  # Optional when api_key, team_api_key, organization_api_key, or pool_api_key is set and the stack does not manage automations.
   token = var.cursor_token
 
   # Cloud Agents API key. A raw key_ or crsr_ token is captured before session exchange and used when api_key is unset.
