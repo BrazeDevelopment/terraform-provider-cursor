@@ -886,7 +886,7 @@ func TestCloudAgentDataSources(t *testing.T) {
 		t.Fatal(poolRead.resp.Diagnostics)
 	}
 	var poolList privateWorkerPoolsModel
-	if diags := poolRead.resp.State.Get(ctx, &poolList); diags.HasError() || len(poolList.Pools) != 1 || poolList.Pools[0].PoolName.ValueString() != "gpu" {
+	if diags := poolRead.resp.State.Get(ctx, &poolList); diags.HasError() || len(poolList.Pools) != 1 || poolList.Pools[0].PoolName.ValueString() != "gpu" || poolList.Scope.ValueString() != "team_pool" {
 		t.Fatalf("pools %#v %v", poolList, diags)
 	}
 
@@ -899,6 +899,37 @@ func TestCloudAgentDataSources(t *testing.T) {
 	var counts privateWorkersSummaryModel
 	if diags := summaryRead.resp.State.Get(ctx, &counts); diags.HasError() || counts.TeamTotalConnected.ValueInt64() != 2 || counts.TeamInUse.ValueInt64() != 1 {
 		t.Fatalf("summary %#v %v", counts, diags)
+	}
+}
+
+func TestPrivateWorkerPoolsOmittedScopeStaysNull(t *testing.T) {
+	var gotScope string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotScope = r.URL.Query().Get("scope")
+		_, _ = io.WriteString(w, `{"pools":[{"scope":"team","poolName":"gpu","workerReadyTimeoutSeconds":0,"connectedWorkerCount":1,"inUseWorkerCount":0,"isStale":false},{"scope":"user","poolName":"cpu","workerReadyTimeoutSeconds":0,"connectedWorkerCount":0,"inUseWorkerCount":0,"isStale":false}]}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	ds := &privateWorkerPoolsDataSource{client: publicClient(server.URL, "key_pool")}
+	sch := dataSchema(t, ds)
+	attr, ok := sch.Attributes["scope"].(dschema.StringAttribute)
+	if !ok || !attr.Optional || attr.Computed {
+		t.Fatalf("scope = %#v, want an optional non-computed string", sch.Attributes["scope"])
+	}
+
+	read := newDataRead(sch)
+	read.req.Config = tfsdk.Config{Schema: sch, Raw: mustDataState(t, ctx, sch, &privateWorkerPoolsModel{Scope: types.StringNull()}).Raw}
+	ds.Read(ctx, read.req, read.resp)
+	if read.resp.Diagnostics.HasError() {
+		t.Fatal(read.resp.Diagnostics)
+	}
+	var got privateWorkerPoolsModel
+	if diags := read.resp.State.Get(ctx, &got); diags.HasError() {
+		t.Fatal(diags)
+	}
+	if gotScope != "all" || !got.Scope.IsNull() || got.ID.ValueString() != "all" || len(got.Pools) != 2 {
+		t.Fatalf("query scope=%q state scope null=%t id=%s pools=%d", gotScope, got.Scope.IsNull(), got.ID.ValueString(), len(got.Pools))
 	}
 }
 

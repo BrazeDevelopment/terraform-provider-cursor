@@ -619,7 +619,9 @@ func (d *privateWorkerPoolsDataSource) Read(ctx context.Context, req datasource.
 		resp.Diagnostics.AddError("Failed to list private worker pools", err.Error())
 		return
 	}
-	model := privateWorkerPoolsModel{ID: types.StringValue(scope), Scope: types.StringValue(scope)}
+	// scope is optional and not computed, so an omitted value must stay null.
+	// The list request still uses all, which returns every pool.
+	model := privateWorkerPoolsModel{ID: types.StringValue(scope), Scope: cfg.Scope}
 	for _, pool := range pools {
 		item := privateWorkerPoolDataModel{
 			ID:                        types.StringValue(poolTerraformID(privateWorkerPoolModel{Scope: types.StringValue(pool.Scope), PoolName: types.StringValue(pool.PoolName), RepoOwner: types.StringValue(pool.RepoOwner), RepoName: types.StringValue(pool.RepoName)})),
