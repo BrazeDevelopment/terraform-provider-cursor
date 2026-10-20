@@ -6,7 +6,6 @@ import (
 
 	"github.com/cursor/terraform-provider-cursor/internal/publicapi"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -72,10 +71,8 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"environment_json": schema.StringAttribute{
 				Required:    true,
-				Description: "environment.json as a JSON string, using the .cursor/environment.json schema. Key order and whitespace are normalized.",
-				PlanModifiers: []planmodifier.String{
-					normalizeEnvironmentJSONModifier{},
-				},
+				Description: "environment.json as a JSON string, using the .cursor/environment.json schema. Refresh keeps the configured text while the saved configuration is the same JSON, so key order and whitespace do not cause drift.",
+				Validators:  []validator.String{environmentJSONValidator{}},
 			},
 			"repos": schema.ListNestedAttribute{
 				Required:    true,
@@ -96,26 +93,23 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 	}
 }
 
-type normalizeEnvironmentJSONModifier struct{}
+type environmentJSONValidator struct{}
 
-func (m normalizeEnvironmentJSONModifier) Description(context.Context) string {
-	return "Normalizes environment_json so key order and whitespace do not drift."
+func (v environmentJSONValidator) Description(context.Context) string {
+	return "Must be a single valid JSON value."
 }
 
-func (m normalizeEnvironmentJSONModifier) MarkdownDescription(ctx context.Context) string {
-	return m.Description(ctx)
+func (v environmentJSONValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
 }
 
-func (m normalizeEnvironmentJSONModifier) PlanModifyString(_ context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+func (v environmentJSONValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
 	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
 		return
 	}
-	normalized, err := normalizeEnvironmentJSON(req.ConfigValue.ValueString())
-	if err != nil {
+	if _, err := normalizeEnvironmentJSON(req.ConfigValue.ValueString()); err != nil {
 		resp.Diagnostics.AddAttributeError(req.Path, "Invalid environment_json", err.Error())
-		return
 	}
-	resp.PlanValue = types.StringValue(normalized)
 }
 
 func (r *environmentResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -151,16 +145,10 @@ func (r *environmentResource) Create(ctx context.Context, req resource.CreateReq
 		resp.Diagnostics.AddError("Failed to create Cursor environment", err.Error())
 		return
 	}
-	state, diags := environmentFromAPI(ctx, created, plan.EnvironmentJSON.ValueString())
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
+	if fresh, err := client.GetEnvironment(ctx, created.ID); err == nil {
+		created = fresh
 	}
-	fresh, err := client.GetEnvironment(ctx, created.ID)
-	if err == nil {
-		state, diags = environmentFromAPI(ctx, fresh, plan.EnvironmentJSON.ValueString())
-		resp.Diagnostics.Append(diags...)
-	}
+	state := environmentFromAPI(created, plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -187,8 +175,7 @@ func (r *environmentResource) Read(ctx context.Context, req resource.ReadRequest
 	if env.RepoFile != nil {
 		resp.Diagnostics.AddWarning("Environment configuration is managed in git", fmt.Sprintf("This environment loads its configuration from %s in %s. That file is managed in git. The provider will not update it.", env.RepoFile.Path, env.RepoFile.URL))
 	}
-	next, diags := environmentFromAPI(ctx, env, state.EnvironmentJSON.ValueString())
-	resp.Diagnostics.Append(diags...)
+	next := environmentFromAPI(env, state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &next)...)
 }
 
@@ -222,9 +209,11 @@ func (r *environmentResource) Update(ctx context.Context, req resource.UpdateReq
 		name := plan.Name.ValueString()
 		patch.Name = &name
 	}
-	if !plan.EnvironmentJSON.Equal(prior.EnvironmentJSON) {
-		raw := plan.EnvironmentJSON.ValueString()
-		patch.EnvironmentJSON = &raw
+	if planned, err := normalizeEnvironmentJSON(plan.EnvironmentJSON.ValueString()); err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("environment_json"), "Invalid environment_json", err.Error())
+		return
+	} else if saved, _ := normalizeEnvironmentJSON(current.EnvironmentJSON); planned != saved {
+		patch.EnvironmentJSON = &planned
 	}
 	if patch.Name != nil || patch.EnvironmentJSON != nil {
 		if err := client.UpdateEnvironment(ctx, prior.ID.ValueString(), patch); err != nil {
@@ -237,8 +226,7 @@ func (r *environmentResource) Update(ctx context.Context, req resource.UpdateReq
 		resp.Diagnostics.AddError("Failed to read Cursor environment", err.Error())
 		return
 	}
-	state, diags := environmentFromAPI(ctx, fresh, plan.EnvironmentJSON.ValueString())
-	resp.Diagnostics.Append(diags...)
+	state := environmentFromAPI(fresh, plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -302,25 +290,7 @@ func repoWrites(repos []environmentRepoModel) []publicapi.EnvironmentRepo {
 	return out
 }
 
-func environmentFromAPI(_ context.Context, env *publicapi.Environment, fallbackJSON string) (environmentModel, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	repos := make([]environmentRepoModel, 0, len(env.Repos))
-	for _, repo := range env.Repos {
-		repos = append(repos, environmentRepoModel{URL: types.StringValue(repo.URL)})
-	}
-	raw := env.EnvironmentJSON
-	if raw == "" {
-		raw = fallbackJSON
-	}
-	if raw != "" {
-		if normalized, err := normalizeEnvironmentJSON(raw); err == nil {
-			raw = normalized
-		}
-	}
-	jsonValue := types.StringNull()
-	if raw != "" {
-		jsonValue = types.StringValue(raw)
-	}
+func environmentFromAPI(env *publicapi.Environment, prior environmentModel) environmentModel {
 	name := types.StringNull()
 	if env.Name != "" {
 		name = types.StringValue(env.Name)
@@ -329,7 +299,7 @@ func environmentFromAPI(_ context.Context, env *publicapi.Environment, fallbackJ
 		ID:              types.StringValue(env.ID),
 		Owner:           types.StringValue(env.Owner),
 		Name:            name,
-		Repos:           repos,
-		EnvironmentJSON: jsonValue,
-	}, diags
+		Repos:           keepEquivalentEnvironmentRepos(prior.Repos, env.Repos),
+		EnvironmentJSON: keepEquivalentJSON(prior.EnvironmentJSON, env.EnvironmentJSON),
+	}
 }

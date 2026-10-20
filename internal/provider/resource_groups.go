@@ -49,7 +49,7 @@ type groupMembersResource struct {
 type groupMembersModel struct {
 	ID      types.String `tfsdk:"id"`
 	GroupID types.String `tfsdk:"group_id"`
-	UserIDs types.List   `tfsdk:"user_ids"`
+	UserIDs types.Set    `tfsdk:"user_ids"`
 }
 
 func NewTeamDirectoryGroupResource() resource.Resource {
@@ -116,37 +116,13 @@ func (r *groupMembersResource) Schema(_ context.Context, _ resource.SchemaReques
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 				Description:   "Group id.",
 			},
-			"user_ids": schema.ListAttribute{
+			"user_ids": schema.SetAttribute{
 				ElementType: types.StringType,
 				Required:    true,
-				Description: "Public user ids. Order is normalized.",
-				PlanModifiers: []planmodifier.List{
-					sortStringListModifier{},
-				},
+				Description: "Public user ids.",
 			},
 		},
 	}
-}
-
-type sortStringListModifier struct{}
-
-func (m sortStringListModifier) Description(context.Context) string { return "Sorts the list." }
-func (m sortStringListModifier) MarkdownDescription(ctx context.Context) string {
-	return m.Description(ctx)
-}
-func (m sortStringListModifier) PlanModifyList(ctx context.Context, req planmodifier.ListRequest, resp *planmodifier.ListResponse) {
-	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
-		return
-	}
-	var values []string
-	resp.Diagnostics.Append(req.ConfigValue.ElementsAs(ctx, &values, false)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	slices.Sort(values)
-	list, diags := types.ListValueFrom(ctx, types.StringType, values)
-	resp.Diagnostics.Append(diags...)
-	resp.PlanValue = list
 }
 
 func (r *groupResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -333,7 +309,7 @@ func (r *groupMembersResource) Create(ctx context.Context, req resource.CreateRe
 		resp.Diagnostics.AddError("Provider not configured", err.Error())
 		return
 	}
-	ids := stringValues(ctx, plan.UserIDs)
+	ids := setValues(ctx, plan.UserIDs)
 	if err := r.client.bulkGroupMembers(ctx, apiName, key, collection, plan.GroupID.ValueString(), "bulk-add", ids); err != nil {
 		resp.Diagnostics.AddError("Failed to add group members", err.Error())
 		return
@@ -381,8 +357,8 @@ func (r *groupMembersResource) Update(ctx context.Context, req resource.UpdateRe
 		resp.Diagnostics.AddError("Provider not configured", err.Error())
 		return
 	}
-	desired := stringValues(ctx, plan.UserIDs)
-	current := stringValues(ctx, prior.UserIDs)
+	desired := setValues(ctx, plan.UserIDs)
+	current := setValues(ctx, prior.UserIDs)
 	if err := r.client.bulkGroupMembers(ctx, apiName, key, collection, plan.GroupID.ValueString(), "bulk-remove", difference(current, desired)); err != nil {
 		resp.Diagnostics.AddError("Failed to remove group members", err.Error())
 		return
@@ -410,7 +386,7 @@ func (r *groupMembersResource) Delete(ctx context.Context, req resource.DeleteRe
 		resp.Diagnostics.AddError("Failed to read group members", err.Error())
 		return
 	}
-	ids := stringValues(ctx, state.UserIDs)
+	ids := setValues(ctx, state.UserIDs)
 	for _, member := range members {
 		ids = append(ids, member.UserID)
 	}
@@ -425,8 +401,19 @@ func (r *groupMembersResource) endpoint() (string, string, string, error) {
 
 func membersState(groupID string, ids []string) *groupMembersModel {
 	slices.Sort(ids)
-	list, _ := types.ListValueFrom(context.Background(), types.StringType, ids)
-	return &groupMembersModel{ID: types.StringValue(groupID), GroupID: types.StringValue(groupID), UserIDs: list}
+	set, _ := types.SetValueFrom(context.Background(), types.StringType, ids)
+	return &groupMembersModel{ID: types.StringValue(groupID), GroupID: types.StringValue(groupID), UserIDs: set}
+}
+
+func setValues(ctx context.Context, set types.Set) []string {
+	if set.IsNull() || set.IsUnknown() {
+		return nil
+	}
+	var values []string
+	if diags := set.ElementsAs(ctx, &values, false); diags.HasError() {
+		return nil
+	}
+	return values
 }
 
 func stringValues(ctx context.Context, list types.List) []string {

@@ -181,7 +181,7 @@ func (r *repoBlocklistResource) Create(ctx context.Context, req resource.CreateR
 		resp.Diagnostics.AddError("Failed to upsert repository blocklist", err.Error())
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, blocklistModel(record))...)
+	resp.Diagnostics.Append(resp.State.Set(ctx, blocklistModel(record, plan.URL))...)
 }
 
 func (r *repoBlocklistResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -197,7 +197,7 @@ func (r *repoBlocklistResource) Read(ctx context.Context, req resource.ReadReque
 	}
 	for _, repo := range repos {
 		if repo.ID == state.ID.ValueString() || (state.ID.ValueString() == "" && repo.URL == state.URL.ValueString()) {
-			resp.Diagnostics.Append(resp.State.Set(ctx, blocklistModel(&repo))...)
+			resp.Diagnostics.Append(resp.State.Set(ctx, blocklistModel(&repo, state.URL))...)
 			return
 		}
 	}
@@ -215,7 +215,7 @@ func (r *repoBlocklistResource) Update(ctx context.Context, req resource.UpdateR
 		resp.Diagnostics.AddError("Failed to upsert repository blocklist", err.Error())
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, blocklistModel(record))...)
+	resp.Diagnostics.Append(resp.State.Set(ctx, blocklistModel(record, plan.URL))...)
 }
 
 func (r *repoBlocklistResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -229,11 +229,11 @@ func (r *repoBlocklistResource) Delete(ctx context.Context, req resource.DeleteR
 	}
 }
 
-func blocklistModel(record *repoBlocklistRecord) *repoBlocklistModel {
+func blocklistModel(record *repoBlocklistRecord, priorURL types.String) *repoBlocklistModel {
 	patterns := record.Patterns
 	if patterns == nil {
 		patterns = []string{}
 	}
 	list, _ := types.ListValueFrom(context.Background(), types.StringType, patterns)
-	return &repoBlocklistModel{ID: types.StringValue(record.ID), URL: types.StringValue(record.URL), Patterns: list}
+	return &repoBlocklistModel{ID: types.StringValue(record.ID), URL: keepEquivalentRepoURL(priorURL, record.URL), Patterns: list}
 }

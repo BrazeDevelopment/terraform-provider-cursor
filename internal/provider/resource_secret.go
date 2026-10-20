@@ -97,9 +97,6 @@ func (r *secretResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			ElementType: types.StringType,
 			Required:    true,
 			Description: "Repositories that receive this version. An empty list means every repository. Values are compared as lowercase host/owner/repo, sorted. acme/api, an https URL, and a git@ URL normalize to the same repository.",
-			PlanModifiers: []planmodifier.List{
-				canonicalSecretReposModifier{},
-			},
 		},
 		"value_wo": schema.StringAttribute{
 			Required:    true,
@@ -131,30 +128,6 @@ func (r *secretResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 		}
 	}
 	resp.Schema = schema.Schema{Description: desc, Attributes: attrs}
-}
-
-type canonicalSecretReposModifier struct{}
-
-func (m canonicalSecretReposModifier) Description(context.Context) string {
-	return "Normalizes secret repositories to lowercase host/owner/repo and sorts them."
-}
-
-func (m canonicalSecretReposModifier) MarkdownDescription(ctx context.Context) string {
-	return m.Description(ctx)
-}
-
-func (m canonicalSecretReposModifier) PlanModifyList(ctx context.Context, req planmodifier.ListRequest, resp *planmodifier.ListResponse) {
-	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
-		return
-	}
-	var repos []string
-	resp.Diagnostics.Append(req.ConfigValue.ElementsAs(ctx, &repos, false)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	list, diags := types.ListValueFrom(ctx, types.StringType, publicapi.CanonicalRepos(repos))
-	resp.Diagnostics.Append(diags...)
-	resp.PlanValue = list
 }
 
 func (r *secretResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -433,15 +406,14 @@ func (r *secretResource) setSecret(ctx context.Context, state *tfsdk.State, mode
 	return state.Set(ctx, &model)
 }
 
-func secretState(plan secretModel, version *publicapi.SecretVersion) secretModel {
-	repos, _ := types.ListValueFrom(context.Background(), types.StringType, publicapi.CanonicalRepos(version.Repos))
-	state := plan
+func secretState(prior secretModel, version *publicapi.SecretVersion) secretModel {
+	state := prior
 	state.ValueWO = types.StringNull()
 	state.ID = types.StringValue(version.ID)
 	state.SecretVersionID = types.StringValue(version.ID)
 	state.Name = types.StringValue(version.Name)
 	state.Type = types.StringValue(version.Type)
-	state.Repos = repos
+	state.Repos = keepEquivalentRepos(context.Background(), prior.Repos, version.Repos)
 	return state
 }
 
