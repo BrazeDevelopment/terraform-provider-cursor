@@ -51,3 +51,13 @@ Optional:
 
 - `allowed_values` (List of String) Values members may pick. Null clears the restriction.
 - `default_value` (String) Team default. Null restores the catalog default.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import cursor_model_access_model.opus anthropic/claude-opus-4-6
+```

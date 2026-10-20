@@ -31,7 +31,7 @@ resource "cursor_environment" "web" {
 
 ### Required
 
-- `environment_json` (String) environment.json as a JSON string, using the .cursor/environment.json schema. Key order and whitespace are normalized.
+- `environment_json` (String) environment.json as a JSON string, using the .cursor/environment.json schema. Refresh keeps the configured text while the saved configuration is the same JSON, so key order and whitespace do not cause drift.
 - `name` (String) Display name. It must be unique for the owner.
 - `owner` (String) team or personal. Changing owner replaces the environment.
 - `repos` (Attributes List) Repositories in the environment. An empty list creates an environment without repositories. Changing the list replaces the environment. (see [below for nested schema](#nestedatt--repos))
@@ -46,3 +46,13 @@ resource "cursor_environment" "web" {
 Required:
 
 - `url` (String) Repository URL.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import cursor_environment.web 8f14e45f-ceea-4e6b-9c3a-1d2e3f4a5b6c
+```

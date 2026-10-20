@@ -40,3 +40,13 @@ resource "cursor_private_worker_pool" "gpu" {
 - `connected_worker_count` (Number) Workers currently connected to this pool.
 - `id` (String) team/<pool_name>, team/<pool_name>/<repo_owner>/<repo_name>, or the same forms with user.
 - `in_use_worker_count` (Number) Connected workers that currently have an assigned agent.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import cursor_private_worker_pool.gpu team/gpu
+```

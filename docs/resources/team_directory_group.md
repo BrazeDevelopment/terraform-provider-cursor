@@ -34,3 +34,13 @@ resource "cursor_team_directory_group" "eng" {
 
 - `id` (String) Group id.
 - `member_count` (Number) Number of members.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import cursor_team_directory_group.eng team_group_01k2ja2000e0080000000000g1
+```

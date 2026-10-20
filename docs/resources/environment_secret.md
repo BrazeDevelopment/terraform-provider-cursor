@@ -41,3 +41,13 @@ resource "cursor_environment_secret" "npm" {
 
 - `id` (String) Secret version id.
 - `secret_version_id` (String) Version id sent as id on update and delete. A version keeps this id through changes to its value, type, or repositories.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import cursor_environment_secret.npm 8f14e45f-ceea-4e6b-9c3a-1d2e3f4a5b6c/NPM_TOKEN/secv_3qKx9mT2bV7nR1cW5yZ8aQ
+```

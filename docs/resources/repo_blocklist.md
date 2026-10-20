@@ -30,3 +30,13 @@ resource "cursor_repo_blocklist" "web" {
 ### Read-Only
 
 - `id` (String) Repository blocklist id (repo_…).
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import cursor_repo_blocklist.web repo_01k2ja2000e0080000000000r1
+```

@@ -25,8 +25,18 @@ resource "cursor_organization_group_members" "eng" {
 ### Required
 
 - `group_id` (String) Group id.
-- `user_ids` (List of String) Public user ids. Order is normalized.
+- `user_ids` (Set of String) Public user ids.
 
 ### Read-Only
 
 - `id` (String) Group id.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import cursor_organization_group_members.eng g_01k2ja2000e0080000000000g1
+```

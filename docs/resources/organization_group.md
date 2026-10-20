@@ -35,3 +35,13 @@ resource "cursor_organization_group" "eng" {
 - `member_count` (Number) Number of members.
 - `organization_id` (String) Provider organization_id this group was managed with.
 - `public_id` (String) Public id with the grp_ prefix. Origin grants use this value.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import cursor_organization_group.eng g_01k2ja2000e0080000000000g1
+```

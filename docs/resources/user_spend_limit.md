@@ -33,3 +33,13 @@ resource "cursor_user_spend_limit" "owner" {
 ### Read-Only
 
 - `id` (String) The member email.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import cursor_user_spend_limit.owner owner@example.com
+```
