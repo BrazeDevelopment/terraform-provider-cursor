@@ -433,12 +433,9 @@ func parametersFromAPI(ctx context.Context, prior []modelParameterModel, api []m
 		if !ok {
 			continue
 		}
-		values := found.AllowedValues
-		if values == nil {
-			values = []string{}
-		}
-		list, diags := types.ListValueFrom(ctx, types.StringType, values)
-		if !diags.HasError() {
+		if found.AllowedValues == nil {
+			out[i].AllowedValues = types.ListNull(types.StringType)
+		} else if list, diags := types.ListValueFrom(ctx, types.StringType, found.AllowedValues); !diags.HasError() {
 			out[i].AllowedValues = list
 		}
 		out[i].DefaultValue = stringPtrValue(found.ConfiguredDefaultValue)
