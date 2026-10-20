@@ -116,89 +116,105 @@ func checkWorkflowGuardrails(ctx context.Context, g *guardrailsConfig, req resou
 	}
 
 	if g.HasAllowedScopes {
-		if plan.Scope.IsUnknown() {
-			return diags
-		}
-		scope := "user"
-		if !plan.Scope.IsNull() && strings.TrimSpace(plan.Scope.ValueString()) != "" {
-			scope = strings.TrimSpace(plan.Scope.ValueString())
-		}
-		if !slices.Contains(g.AllowedScopes, scope) {
-			diags.AddAttributeError(path.Root("scope"), "Automation scope is not allowed", fmt.Sprintf("guardrails.allowed_automation_scopes rejected scope %q. An unset scope is user.", scope))
-		}
+		diags.Append(checkScopeGuardrail(g, cfg)...)
 	}
-
 	if g.RequirePoolLabel {
-		switch {
-		case privateWorkerUnknown(plan.PrivateWorker, req, ctx):
-			return diags
-		case plan.PrivateWorker == nil:
-			diags.AddAttributeError(path.Root("private_worker"), "Private worker pool is required", "guardrails.require_pool_label requires private_worker.labels.pool. An empty private_worker block routes to any worker.")
-		default:
-			if plan.PrivateWorker.Labels.IsUnknown() {
-				return diags
-			}
-			labels := map[string]string{}
-			if !plan.PrivateWorker.Labels.IsNull() {
-				elemDiags := plan.PrivateWorker.Labels.ElementsAs(ctx, &labels, false)
-				diags.Append(elemDiags...)
-				if elemDiags.HasError() {
-					return diags
-				}
-			}
-			if strings.TrimSpace(labels["pool"]) == "" {
-				diags.AddAttributeError(path.Root("private_worker").AtName("labels"), "Private worker pool is required", "guardrails.require_pool_label requires labels.pool to be a non-empty string. private_worker {} routes to any worker.")
-			}
-			if _, ok := labels["repo"]; ok {
-				diags.AddAttributeError(path.Root("private_worker").AtName("labels"), "Private worker repo label is reserved", "Do not set labels.repo. Cursor sets the repo label from the run.")
-			}
+		diags.Append(checkPoolGuardrail(ctx, plan, req)...)
+	}
+	if g.HasAllowedModels {
+		diags.Append(checkModelGuardrail(g, cfg)...)
+	}
+	if g.HasAllowedOwners {
+		if owners, unknown := workflowOwners(ctx, plan); !unknown {
+			diags.Append(g.checkOwners("automation repository", owners)...)
 		}
 	}
+	if g.DenyPRApproval && !actionsUnknown(ctx, req) {
+		diags.Append(checkApprovalGuardrail(cfg)...)
+	}
+	return diags
+}
 
-	if g.HasAllowedModels {
-		if cfg.ModelSelection != nil {
-			if cfg.ModelSelection.ModelID.IsUnknown() {
-				return diags
-			}
-			modelID := strings.TrimSpace(cfg.ModelSelection.ModelID.ValueString())
-			if !slices.Contains(g.AllowedModels, modelID) {
-				diags.AddAttributeError(path.Root("model_selection").AtName("model_id"), "Model is not allowed", fmt.Sprintf("guardrails.allowed_models rejected model_selection.model_id %q.", modelID))
-			}
-		} else if cfg.Model.IsUnknown() {
+// Scope is Optional and Computed, so an unset scope is unknown in the plan on create.
+// The configuration keeps it null, which is the user scope.
+func checkScopeGuardrail(g *guardrailsConfig, cfg platformWorkflowModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if cfg.Scope.IsUnknown() {
+		return diags
+	}
+	scope := "user"
+	if !cfg.Scope.IsNull() && strings.TrimSpace(cfg.Scope.ValueString()) != "" {
+		scope = strings.TrimSpace(cfg.Scope.ValueString())
+	}
+	if !slices.Contains(g.AllowedScopes, scope) {
+		diags.AddAttributeError(path.Root("scope"), "Automation scope is not allowed", fmt.Sprintf("guardrails.allowed_automation_scopes rejected scope %q. An unset scope is user.", scope))
+	}
+	return diags
+}
+
+func checkPoolGuardrail(ctx context.Context, plan platformWorkflowModel, req resource.ModifyPlanRequest) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if privateWorkerUnknown(plan.PrivateWorker, req, ctx) {
+		return diags
+	}
+	if plan.PrivateWorker == nil {
+		diags.AddAttributeError(path.Root("private_worker"), "Private worker pool is required", "guardrails.require_pool_label requires private_worker.labels.pool. An empty private_worker block routes to any worker.")
+		return diags
+	}
+	if plan.PrivateWorker.Labels.IsUnknown() {
+		return diags
+	}
+	labels := map[string]string{}
+	if !plan.PrivateWorker.Labels.IsNull() {
+		elemDiags := plan.PrivateWorker.Labels.ElementsAs(ctx, &labels, false)
+		diags.Append(elemDiags...)
+		if elemDiags.HasError() {
 			return diags
-		} else if cfg.Model.IsNull() || strings.TrimSpace(cfg.Model.ValueString()) == "" {
-			diags.AddAttributeError(path.Root("model"), "Model is not allowed", "guardrails.allowed_models requires model or model_selection. The server assigns a default only after apply, so a plan-time check cannot see it.")
-		} else if model := strings.TrimSpace(cfg.Model.ValueString()); !slices.Contains(g.AllowedModels, model) {
+		}
+	}
+	if strings.TrimSpace(labels["pool"]) == "" {
+		diags.AddAttributeError(path.Root("private_worker").AtName("labels"), "Private worker pool is required", "guardrails.require_pool_label requires labels.pool to be a non-empty string. private_worker {} routes to any worker.")
+	}
+	if _, ok := labels["repo"]; ok {
+		diags.AddAttributeError(path.Root("private_worker").AtName("labels"), "Private worker repo label is reserved", "Do not set labels.repo. Cursor sets the repo label from the run.")
+	}
+	return diags
+}
+
+func checkModelGuardrail(g *guardrailsConfig, cfg platformWorkflowModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	switch {
+	case cfg.ModelSelection != nil:
+		if cfg.ModelSelection.ModelID.IsUnknown() {
+			return diags
+		}
+		modelID := strings.TrimSpace(cfg.ModelSelection.ModelID.ValueString())
+		if !slices.Contains(g.AllowedModels, modelID) {
+			diags.AddAttributeError(path.Root("model_selection").AtName("model_id"), "Model is not allowed", fmt.Sprintf("guardrails.allowed_models rejected model_selection.model_id %q.", modelID))
+		}
+	case cfg.Model.IsUnknown():
+	case cfg.Model.IsNull() || strings.TrimSpace(cfg.Model.ValueString()) == "":
+		diags.AddAttributeError(path.Root("model"), "Model is not allowed", "guardrails.allowed_models requires model or model_selection. The server assigns a default only after apply, so a plan-time check cannot see it.")
+	default:
+		if model := strings.TrimSpace(cfg.Model.ValueString()); !slices.Contains(g.AllowedModels, model) {
 			diags.AddAttributeError(path.Root("model"), "Model is not allowed", fmt.Sprintf("guardrails.allowed_models rejected model %q.", model))
 		}
 	}
+	return diags
+}
 
-	if g.HasAllowedOwners {
-		owners, unknown := workflowOwners(ctx, plan)
-		if unknown {
-			return diags
+func checkApprovalGuardrail(cfg platformWorkflowModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	for i, action := range cfg.Actions {
+		if action.ApprovePr != nil {
+			diags.AddAttributeError(path.Root("action").AtListIndex(i).AtName("approve_pr"), "Pull request approval is not allowed", "guardrails.deny_pr_approval rejected action.approve_pr. approve_pr is deprecated.")
 		}
-		diags.Append(g.checkOwners("automation repository", owners)...)
-	}
-
-	if g.DenyPRApproval {
-		if actionsUnknown(ctx, req) {
-			return diags
+		if action.PrComment == nil {
+			continue
 		}
-		for i, action := range cfg.Actions {
-			if action.ApprovePr != nil {
-				diags.AddAttributeError(path.Root("action").AtListIndex(i).AtName("approve_pr"), "Pull request approval is not allowed", "guardrails.deny_pr_approval rejected action.approve_pr. approve_pr is deprecated.")
-			}
-			if action.PrComment == nil {
-				continue
-			}
-			allow := action.PrComment.AllowApprove
-			if allow.IsUnknown() {
-				return diags
-			}
-			if !allow.IsNull() && allow.ValueBool() {
-				diags.AddAttributeError(path.Root("action").AtListIndex(i).AtName("pr_comment").AtName("allow_approve"), "Pull request approval is not allowed", "guardrails.deny_pr_approval rejected pr_comment.allow_approve. allow_approve is the switch the server honors.")
-			}
+		allow := action.PrComment.AllowApprove
+		if !allow.IsUnknown() && !allow.IsNull() && allow.ValueBool() {
+			diags.AddAttributeError(path.Root("action").AtListIndex(i).AtName("pr_comment").AtName("allow_approve"), "Pull request approval is not allowed", "guardrails.deny_pr_approval rejected pr_comment.allow_approve. allow_approve is the switch the server honors.")
 		}
 	}
 	return diags
