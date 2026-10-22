@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"slices"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -314,7 +313,7 @@ func (r *groupMembersResource) Create(ctx context.Context, req resource.CreateRe
 		resp.Diagnostics.AddError("Failed to add group members", err.Error())
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, membersState(plan.GroupID.ValueString(), ids))...)
+	resp.Diagnostics.Append(setMembersState(ctx, &resp.State, plan.GroupID.ValueString(), ids)...)
 }
 
 func (r *groupMembersResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -341,8 +340,7 @@ func (r *groupMembersResource) Read(ctx context.Context, req resource.ReadReques
 	for _, member := range members {
 		ids = append(ids, member.UserID)
 	}
-	slices.Sort(ids)
-	resp.Diagnostics.Append(resp.State.Set(ctx, membersState(state.GroupID.ValueString(), ids))...)
+	resp.Diagnostics.Append(setMembersState(ctx, &resp.State, state.GroupID.ValueString(), uniqueStrings(ids))...)
 }
 
 func (r *groupMembersResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -367,7 +365,7 @@ func (r *groupMembersResource) Update(ctx context.Context, req resource.UpdateRe
 		resp.Diagnostics.AddError("Failed to add group members", err.Error())
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, membersState(plan.GroupID.ValueString(), desired))...)
+	resp.Diagnostics.Append(setMembersState(ctx, &resp.State, plan.GroupID.ValueString(), desired)...)
 }
 
 func (r *groupMembersResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -399,10 +397,20 @@ func (r *groupMembersResource) endpoint() (string, string, string, error) {
 	return (&groupResource{client: r.client, kind: r.kind}).endpoint()
 }
 
-func membersState(groupID string, ids []string) *groupMembersModel {
-	slices.Sort(ids)
-	set, _ := types.SetValueFrom(context.Background(), types.StringType, ids)
-	return &groupMembersModel{ID: types.StringValue(groupID), GroupID: types.StringValue(groupID), UserIDs: set}
+func setMembersState(ctx context.Context, state *tfsdk.State, groupID string, ids []string) diag.Diagnostics {
+	model, diags := membersState(ctx, groupID, ids)
+	if diags.HasError() {
+		return diags
+	}
+	return append(diags, state.Set(ctx, model)...)
+}
+
+func membersState(ctx context.Context, groupID string, ids []string) (*groupMembersModel, diag.Diagnostics) {
+	set, diags := types.SetValueFrom(ctx, types.StringType, uniqueStrings(ids))
+	if diags.HasError() {
+		return nil, diags
+	}
+	return &groupMembersModel{ID: types.StringValue(groupID), GroupID: types.StringValue(groupID), UserIDs: set}, diags
 }
 
 func setValues(ctx context.Context, set types.Set) []string {
@@ -442,8 +450,11 @@ func difference(from, subtract []string) []string {
 }
 
 func uniqueStrings(values []string) []string {
-	seen := map[string]struct{}{}
-	var out []string
+	if len(values) == 0 {
+		return values
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
 	for _, value := range values {
 		if _, ok := seen[value]; ok {
 			continue

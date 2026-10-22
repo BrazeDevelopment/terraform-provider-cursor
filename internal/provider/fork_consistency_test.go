@@ -318,6 +318,75 @@ func TestGroupMembersAreASet(t *testing.T) {
 	}
 }
 
+func TestGroupMembersRefreshDedupesPagedUserIDs(t *testing.T) {
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		hasNext := page == "1"
+		members := []groupMemberRecord{{UserID: "user_a"}, {UserID: "user_a"}, {UserID: "user_b"}}
+		if page == "2" {
+			members = []groupMemberRecord{{UserID: "user_b"}, {UserID: "user_c"}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"members":    members,
+			"pagination": map[string]any{"hasNextPage": hasNext},
+		})
+	}))
+	defer server.Close()
+	res := &groupMembersResource{client: &apiClient{httpClient: server.Client(), adminBase: server.URL, teamAPIKey: "team-key", userAgent: "test"}, kind: groupKindTeam}
+	sch := resourceSchema(t, res)
+	priorIDs, diags := types.SetValueFrom(ctx, types.StringType, []string{"user_a"})
+	if diags.HasError() {
+		t.Fatal(diags)
+	}
+	prior := groupMembersModel{ID: types.StringValue("team_group_1"), GroupID: types.StringValue("team_group_1"), UserIDs: priorIDs}
+	state := mustState(t, ctx, sch, &prior)
+	read := &resource.ReadResponse{State: state}
+	res.Read(ctx, resource.ReadRequest{State: state}, read)
+	if read.Diagnostics.HasError() {
+		t.Fatal(read.Diagnostics)
+	}
+	var got groupMembersModel
+	if diags := read.State.Get(ctx, &got); diags.HasError() {
+		t.Fatal(diags)
+	}
+	want, diags := types.SetValueFrom(ctx, types.StringType, []string{"user_a", "user_b", "user_c"})
+	if diags.HasError() {
+		t.Fatal(diags)
+	}
+	if got.UserIDs.IsNull() || got.UserIDs.IsUnknown() || !got.UserIDs.Equal(want) {
+		t.Fatalf("user_ids = %v, want %v", got.UserIDs, want)
+	}
+}
+
+func TestGroupMembersRefreshKeepsEmptySet(t *testing.T) {
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"members":[],"pagination":{"hasNextPage":false}}`)
+	}))
+	defer server.Close()
+	res := &groupMembersResource{client: &apiClient{httpClient: server.Client(), adminBase: server.URL, teamAPIKey: "team-key", userAgent: "test"}, kind: groupKindTeam}
+	sch := resourceSchema(t, res)
+	priorIDs, diags := types.SetValueFrom(ctx, types.StringType, []string{"user_a"})
+	if diags.HasError() {
+		t.Fatal(diags)
+	}
+	prior := groupMembersModel{ID: types.StringValue("team_group_1"), GroupID: types.StringValue("team_group_1"), UserIDs: priorIDs}
+	state := mustState(t, ctx, sch, &prior)
+	read := &resource.ReadResponse{State: state}
+	res.Read(ctx, resource.ReadRequest{State: state}, read)
+	if read.Diagnostics.HasError() {
+		t.Fatal(read.Diagnostics)
+	}
+	var got groupMembersModel
+	if diags := read.State.Get(ctx, &got); diags.HasError() {
+		t.Fatal(diags)
+	}
+	if got.UserIDs.IsNull() || got.UserIDs.IsUnknown() || len(got.UserIDs.Elements()) != 0 {
+		t.Fatalf("user_ids = %v, want empty set", got.UserIDs)
+	}
+}
+
 func TestAdminResourcesImport(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
