@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -218,11 +219,47 @@ func TestGuardrailsTreatUnsetScopeAsUserAndCheckEveryRule(t *testing.T) {
 	}
 }
 
+func TestGuardrailsOmittedScopeUsesPlanValue(t *testing.T) {
+	ctx := context.Background()
+	sch := resourceSchema(t, &platformWorkflowResource{})
+	cfg := platformWorkflowModel{
+		Name:                 types.StringValue("review"),
+		Prompt:               types.StringValue("review"),
+		Scope:                types.StringNull(),
+		DisabledDefaultTools: types.ListNull(types.StringType),
+	}
+	for _, scope := range []string{"team", "team_visible", "team_editable", "team_editable_user"} {
+		plan := cfg
+		plan.Scope = types.StringValue(scope)
+
+		reject := &platformWorkflowResource{client: &apiClient{guardrails: &guardrailsConfig{
+			HasAllowedScopes: true,
+			AllowedScopes:    []string{"user"},
+		}}}
+		resp := &resource.ModifyPlanResponse{Plan: mustPlan(t, ctx, sch, &plan)}
+		reject.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: resp.Plan, Config: mustConfig(t, ctx, sch, &cfg)}, resp)
+		text := fmtDiag(resp.Diagnostics)
+		if !strings.Contains(text, fmt.Sprintf("scope %q", scope)) || strings.Contains(text, `scope "user"`) {
+			t.Fatalf("omitted scope should keep prior %s value: %s", scope, text)
+		}
+
+		allow := &platformWorkflowResource{client: &apiClient{guardrails: &guardrailsConfig{
+			HasAllowedScopes: true,
+			AllowedScopes:    []string{scope},
+		}}}
+		resp = &resource.ModifyPlanResponse{Plan: mustPlan(t, ctx, sch, &plan)}
+		allow.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: resp.Plan, Config: mustConfig(t, ctx, sch, &cfg)}, resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("prior %s scope should satisfy its allow-list: %s", scope, fmtDiag(resp.Diagnostics))
+		}
+	}
+}
+
 func TestGuardrailsUnknownRuleDoesNotSkipOthers(t *testing.T) {
 	ctx := context.Background()
 	res := &platformWorkflowResource{client: &apiClient{guardrails: &guardrailsConfig{
 		HasAllowedScopes: true,
-		AllowedScopes:    []string{"team"},
+		AllowedScopes:    []string{"team_visible"},
 		RequirePoolLabel: true,
 	}}}
 	sch := resourceSchema(t, res)
@@ -232,7 +269,9 @@ func TestGuardrailsUnknownRuleDoesNotSkipOthers(t *testing.T) {
 		Scope:                types.StringUnknown(),
 		DisabledDefaultTools: types.ListNull(types.StringType),
 	}
-	resp := &resource.ModifyPlanResponse{Plan: mustPlan(t, ctx, sch, &cfg)}
+	plan := cfg
+	plan.Scope = types.StringValue("team")
+	resp := &resource.ModifyPlanResponse{Plan: mustPlan(t, ctx, sch, &plan)}
 	res.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: resp.Plan, Config: mustConfig(t, ctx, sch, &cfg)}, resp)
 	text := fmtDiag(resp.Diagnostics)
 	if strings.Contains(text, "scope") || !strings.Contains(text, "private_worker") {

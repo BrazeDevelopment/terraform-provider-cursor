@@ -69,7 +69,7 @@ provider "cursor" {
 
 Optional:
 
-- `allowed_automation_scopes` (List of String) Automation scopes this provider may manage. An unset scope is user. team and team_editable both run as the team service account and are different scopes. team_visible and team_editable_user run as the creator.
+- `allowed_automation_scopes` (List of String) Automation scopes this provider may manage. An omitted scope keeps a prior value, and is user only when there is no prior value. team and team_editable both run as the team service account and are different scopes. team_visible and team_editable_user run as the creator.
 - `allowed_models` (List of String) Automation catalog model ids. When model_selection is set, model_selection.model_id is compared. Otherwise model is compared. When both are unset, the plan fails because the server assigns a default only after apply.
 - `allowed_repo_owners` (List of String) Repository owners allowed on automation triggers, git_repo, environment repos, and repo-backed pools. Compared against the owner segment of org/repo, github.com/org/repo, and full URLs.
 - `deny_pr_approval` (Boolean) Reject action.approve_pr and action.pr_comment.allow_approve = true. approve_pr is deprecated. allow_approve is the switch the server honors.

@@ -252,7 +252,7 @@ provider "cursor" {
 
 Enforced in `ModifyPlan` for `cursor_platform_workflow`, and in validation for new resources where the same rule applies (F1 repository owners, F8 pool name). Violations fail the plan with a diagnostic naming the rule. Unknown values wait; they do not pass.
 
-- `allowed_automation_scopes`: an unset `scope` is `user`. `team` and `team_editable` both run as the team service account and are different scopes. List the scopes production uses. `team_visible` and `team_editable_user` run as the creator.
+- `allowed_automation_scopes`: an omitted `scope` keeps a prior value, and is `user` only when there is no prior value. `team` and `team_editable` both run as the team service account and are different scopes. List the scopes production uses. `team_visible` and `team_editable_user` run as the creator.
 - `require_pool_label`: `private_worker` is present and `labels["pool"]` is a non-empty string. `private_worker {}` routes to any worker and fails this rule. A configured `repo` label fails the plan; Cursor sets `repo` itself.
 - `allowed_models`: when `model_selection` is set, compare `model_selection.model_id`. Otherwise compare `model`. When both are unset, fail the plan. The server assigns a default only after apply, so a plan-time check cannot see it. This list is the automation catalog. It is not filled from `GET /v1/models` or from Admin model-access ids unless open question 6 says they match.
 - `allowed_repo_owners`: match the owner segment of trigger `repos`, trigger `orgs`, `git_push.repo`, and `git_repo`. Those fields use `org/repo`, `github.com/org/repo`, and full URLs. Compare the owner, not the raw string. Environment `repos` on F1 use the same owner check.

@@ -116,7 +116,7 @@ func checkWorkflowGuardrails(ctx context.Context, g *guardrailsConfig, req resou
 	}
 
 	if g.HasAllowedScopes {
-		diags.Append(checkScopeGuardrail(g, cfg)...)
+		diags.Append(checkScopeGuardrail(g, cfg, plan)...)
 	}
 	if g.RequirePoolLabel {
 		diags.Append(checkPoolGuardrail(ctx, plan, req)...)
@@ -135,21 +135,50 @@ func checkWorkflowGuardrails(ctx context.Context, g *guardrailsConfig, req resou
 	return diags
 }
 
-// Scope is Optional and Computed, so an unset scope is unknown in the plan on create.
-// The configuration keeps it null, which is the user scope.
-func checkScopeGuardrail(g *guardrailsConfig, cfg platformWorkflowModel) diag.Diagnostics {
+// Scope is optional and computed with UseStateForUnknown. An omitted configuration
+// value stays null while the plan keeps a known prior state value, which may be
+// team or another non-user scope. User is the default only when the plan has no prior value.
+func checkScopeGuardrail(g *guardrailsConfig, cfg, plan platformWorkflowModel) diag.Diagnostics {
 	var diags diag.Diagnostics
-	if cfg.Scope.IsUnknown() {
+	scope, ok, fromPrior := automationScopeForGuardrail(cfg.Scope, plan.Scope)
+	if !ok {
 		return diags
 	}
-	scope := "user"
-	if !cfg.Scope.IsNull() && strings.TrimSpace(cfg.Scope.ValueString()) != "" {
-		scope = strings.TrimSpace(cfg.Scope.ValueString())
-	}
 	if !slices.Contains(g.AllowedScopes, scope) {
-		diags.AddAttributeError(path.Root("scope"), "Automation scope is not allowed", fmt.Sprintf("guardrails.allowed_automation_scopes rejected scope %q. An unset scope is user.", scope))
+		detail := fmt.Sprintf("guardrails.allowed_automation_scopes rejected scope %q.", scope)
+		switch {
+		case fromPrior:
+			detail += " An omitted scope keeps the prior value."
+		case cfg.Scope.IsNull() || strings.TrimSpace(cfg.Scope.ValueString()) == "":
+			detail += " An omitted scope with no prior value is user."
+		}
+		diags.AddAttributeError(path.Root("scope"), "Automation scope is not allowed", detail)
 	}
 	return diags
+}
+
+func automationScopeForGuardrail(cfg, plan types.String) (string, bool, bool) {
+	if cfg.IsUnknown() {
+		return "", false, false
+	}
+	if scope, known := knownAutomationScope(cfg); known {
+		return scope, true, false
+	}
+	if scope, known := knownAutomationScope(plan); known {
+		return scope, true, true
+	}
+	return "user", true, false
+}
+
+func knownAutomationScope(value types.String) (string, bool) {
+	if value.IsNull() || value.IsUnknown() {
+		return "", false
+	}
+	scope := strings.TrimSpace(value.ValueString())
+	if scope == "" {
+		return "", false
+	}
+	return scope, true
 }
 
 func checkPoolGuardrail(ctx context.Context, plan platformWorkflowModel, req resource.ModifyPlanRequest) diag.Diagnostics {

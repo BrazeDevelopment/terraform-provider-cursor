@@ -97,7 +97,7 @@ func (p *cursorProvider) Schema(_ context.Context, _ provider.SchemaRequest, res
 					"allowed_automation_scopes": schema.ListAttribute{
 						ElementType: types.StringType,
 						Optional:    true,
-						Description: "Automation scopes this provider may manage. An unset scope is user. team and team_editable both run as the team service account and are different scopes. team_visible and team_editable_user run as the creator.",
+						Description: "Automation scopes this provider may manage. An omitted scope keeps a prior value, and is user only when there is no prior value. team and team_editable both run as the team service account and are different scopes. team_visible and team_editable_user run as the creator.",
 					},
 					"require_pool_label": schema.BoolAttribute{
 						Optional:    true,
