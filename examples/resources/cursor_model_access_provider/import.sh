@@ -1,0 +1,1 @@
+terraform import cursor_model_access_provider.anthropic anthropic

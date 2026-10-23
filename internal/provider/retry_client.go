@@ -21,9 +21,12 @@ const (
 	maxRetryWait          = 2 * time.Minute
 )
 
-type httpDoer interface {
+// HTTPDoer is the HTTP client surface the retry policy wraps.
+type HTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
+
+type httpDoer = HTTPDoer
 
 type retryClient struct {
 	next httpDoer
@@ -34,6 +37,12 @@ func newRetryClient(next httpDoer) *retryClient {
 	return &retryClient{next: next, wait: sleepContext}
 }
 
+// NewRetryClient wraps next with the provider retry policy.
+// POST is retried only on 503 when the response carries Retry-After.
+func NewRetryClient(next HTTPDoer) HTTPDoer {
+	return newRetryClient(next)
+}
+
 func (c *retryClient) Do(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 	for attempt := 1; ; attempt++ {
@@ -41,7 +50,7 @@ func (c *retryClient) Do(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			return resp, err
 		}
-		maxRetries := retryLimit(req.Method, resp.StatusCode)
+		maxRetries := retryLimit(req.Method, resp.StatusCode, resp.Header)
 		if maxRetries == 0 {
 			return resp, nil
 		}
@@ -75,17 +84,32 @@ func (c *retryClient) Do(req *http.Request) (*http.Response, error) {
 	}
 }
 
-func retryLimit(method string, status int) int {
+func retryLimit(method string, status int, header http.Header) int {
 	switch status {
 	case http.StatusTooManyRequests:
 		return maxRateLimitRetries
-	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		switch method {
-		case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete:
+	case http.StatusServiceUnavailable:
+		if method == http.MethodPost && strings.TrimSpace(header.Get("Retry-After")) != "" {
+			return maxServerErrorRetries
+		}
+		if idempotentMethod(method) {
+			return maxServerErrorRetries
+		}
+	case http.StatusBadGateway, http.StatusGatewayTimeout:
+		if idempotentMethod(method) {
 			return maxServerErrorRetries
 		}
 	}
 	return 0
+}
+
+func idempotentMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 func retryWait(ctx context.Context, req *http.Request, resp *http.Response, attempt, maxRetries int) (time.Duration, string) {
