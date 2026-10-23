@@ -190,6 +190,72 @@ func TestEnvironmentStateKeepsConfiguredSpelling(t *testing.T) {
 	}
 }
 
+func TestPoolStateKeepsConfiguredRepoURL(t *testing.T) {
+	ctx := context.Background()
+	apiURL := "https://github.com/acme/api"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = io.WriteString(w, `{"registered":true}`)
+			return
+		}
+		fmt.Fprintf(w, `{"pools":[{"scope":"team","poolName":"gpu","repoOwner":"acme","repoName":"api","repoUrl":%q,"workerReadyTimeoutSeconds":0,"connectedWorkerCount":1,"inUseWorkerCount":0,"isStale":false}]}`, apiURL)
+	}))
+	defer server.Close()
+	res := &privateWorkerPoolResource{client: poolClient(server.URL, "key_pool")}
+	sch := resourceSchema(t, res)
+	attr, ok := sch.Attributes["repo_url"].(schema.StringAttribute)
+	if !ok || !attr.Optional || attr.Computed {
+		t.Fatalf("repo_url = %#v, want an optional non-computed string", sch.Attributes["repo_url"])
+	}
+
+	omitted := privateWorkerPoolModel{
+		Scope: types.StringValue("team"), PoolName: types.StringValue("gpu"),
+		RepoOwner: types.StringValue("acme"), RepoName: types.StringValue("api"), RepoURL: types.StringNull(),
+		WorkerReadyTimeoutSeconds: types.Int64Value(0),
+	}
+	state := mustApply(t, ctx, sch, func(resp *resource.CreateResponse) {
+		res.Create(ctx, resource.CreateRequest{Plan: mustPlan(t, ctx, sch, &omitted)}, resp)
+	})
+	var got privateWorkerPoolModel
+	state.Get(ctx, &got)
+	if !got.RepoURL.IsNull() || got.ID.ValueString() != "team/gpu/acme/api" {
+		t.Fatalf("omitted repo_url state = %#v", got)
+	}
+
+	configured := "https://github.com/Acme/api.git"
+	plan := omitted
+	plan.RepoURL = types.StringValue(configured)
+	state = mustApply(t, ctx, sch, func(resp *resource.CreateResponse) {
+		res.Create(ctx, resource.CreateRequest{Plan: mustPlan(t, ctx, sch, &plan)}, resp)
+	})
+	state.Get(ctx, &got)
+	if got.RepoURL.ValueString() != configured {
+		t.Fatalf("state repo_url = %s, want configured %s", got.RepoURL, configured)
+	}
+
+	apiURL = ""
+	read := &resource.ReadResponse{State: state}
+	res.Read(ctx, resource.ReadRequest{State: state}, read)
+	if read.Diagnostics.HasError() {
+		t.Fatal(read.Diagnostics)
+	}
+	read.State.Get(ctx, &got)
+	if got.RepoURL.ValueString() != configured {
+		t.Fatalf("empty api repo_url cleared state to %s", got.RepoURL)
+	}
+
+	apiURL = "https://github.com/acme/other"
+	read = &resource.ReadResponse{State: state}
+	res.Read(ctx, resource.ReadRequest{State: state}, read)
+	if read.Diagnostics.HasError() {
+		t.Fatal(read.Diagnostics)
+	}
+	read.State.Get(ctx, &got)
+	if got.RepoURL.ValueString() != apiURL {
+		t.Fatalf("drifted repo_url = %s, want %s", got.RepoURL, apiURL)
+	}
+}
+
 func TestGuardrailsTreatUnsetScopeAsUserAndCheckEveryRule(t *testing.T) {
 	ctx := context.Background()
 	res := &platformWorkflowResource{client: &apiClient{guardrails: &guardrailsConfig{

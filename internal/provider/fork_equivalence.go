@@ -77,3 +77,14 @@ func keepEquivalentRepoURL(prior types.String, api string) types.String {
 	}
 	return types.StringValue(api)
 }
+
+// keepOptionalRepoURL is keepEquivalentRepoURL for an optional, non-computed attribute.
+// An omitted or blank value stays as configured when the API fills one in, and an empty
+// API value does not clear a URL the configuration set. A different repository still
+// replaces the prior value so refresh can show drift.
+func keepOptionalRepoURL(prior types.String, api string) types.String {
+	if prior.IsNull() || prior.IsUnknown() || prior.ValueString() == "" || api == "" {
+		return prior
+	}
+	return keepEquivalentRepoURL(prior, api)
+}

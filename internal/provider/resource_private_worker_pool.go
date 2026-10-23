@@ -249,9 +249,7 @@ func (r *privateWorkerPoolResource) readPool(ctx context.Context, client *public
 			model.ConnectedWorkerCount = types.Int64Value(pool.ConnectedWorkerCount)
 			model.InUseWorkerCount = types.Int64Value(pool.InUseWorkerCount)
 			model.WorkerReadyTimeoutSeconds = types.Int64Value(pool.WorkerReadyTimeoutSeconds)
-			if pool.RepoURL != "" {
-				model.RepoURL = types.StringValue(pool.RepoURL)
-			}
+			model.RepoURL = keepOptionalRepoURL(model.RepoURL, pool.RepoURL)
 			return model, nil
 		}
 	}
