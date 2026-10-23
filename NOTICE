@@ -1,2 +1,4 @@
 Cursor Terraform Provider
 Copyright 2026 Anysphere, Inc.
+
+This fork adds Cloud Agents, Admin API, and Organization API resources and plan-time guardrails. The changes are listed in FORK.md.

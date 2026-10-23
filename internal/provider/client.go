@@ -12,6 +12,7 @@ import (
 
 	connect "connectrpc.com/connect"
 	v1connect "github.com/cursor/terraform-provider-cursor/internal/proto/v1/v1connect"
+	"github.com/cursor/terraform-provider-cursor/internal/publicapi"
 )
 
 const userAgentPrefix = "terraform-provider-cursor/"
@@ -20,14 +21,20 @@ const userAgentPrefix = "terraform-provider-cursor/"
 const defaultOriginAPIBase = "https://api.cursor.com/v1/origin"
 
 type apiClient struct {
-	automations v1connect.AutomationsServiceClient
-	httpClient  httpDoer
-	authHeader  string
-	userAgent   string
-	originBase  string
-	adminBase   string
-	teamAPIKey  string
-	orgAPIKey   string
+	automations    v1connect.AutomationsServiceClient
+	httpClient     httpDoer
+	authHeader     string
+	userAgent      string
+	originBase     string
+	adminBase      string
+	teamAPIKey     string
+	orgAPIKey      string
+	apiKey         string
+	poolAPIKey     string
+	organizationID string
+	guardrails     *guardrailsConfig
+	public         *publicapi.Client
+	pools          *publicapi.Client
 }
 
 // Admin API keys are optional; grants need them only to resolve user_email and group_name.

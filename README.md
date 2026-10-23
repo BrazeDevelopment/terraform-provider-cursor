@@ -23,10 +23,13 @@ terraform {
 
 Use explicit configuration or environment variables:
 
-- `CURSOR_TOKEN` - Cursor API token. Required. Raw `key_` and `crsr_` API keys are exchanged for a session token automatically.
-- `CURSOR_ENDPOINT` - Cursor API base URL. Optional, defaults to `https://api2.cursor.sh`.
-- `CURSOR_TEAM_API_KEY` - Team Admin API key. Optional; needed only for Origin grants keyed by `user_email`.
-- `CURSOR_ORGANIZATION_API_KEY` - Organization Admin API key. Optional; needed only for Origin grants keyed by `group_name`.
+- `CURSOR_TOKEN` - Cursor API token for Automations and Origin. Raw `key_` and `crsr_` API keys are exchanged for a session token automatically. Optional when `api_key`, `team_api_key`, `organization_api_key`, or `pool_api_key` is set and the stack does not manage automations.
+- `CURSOR_ENDPOINT` - Cursor Automations API base URL. Optional, defaults to `https://api2.cursor.sh`.
+- `CURSOR_API_KEY` - Raw Cloud Agents API key. Optional. Defaults to `CURSOR_TOKEN` when that value is still a raw `key_` or `crsr_` key, captured before session exchange.
+- `CURSOR_TEAM_API_KEY` - Team Admin API key. Used for Origin grants keyed by `user_email` and for Admin API resources.
+- `CURSOR_ORGANIZATION_API_KEY` - Organization Admin API key. Used for Origin grants keyed by `group_name` and for Organization API resources.
+- `CURSOR_ORGANIZATION_ID` - Public organization id (`org_…`). Required by Organization API resources.
+- `CURSOR_POOL_API_KEY` - Team service-account key for private worker pools. Optional. Defaults to the Cloud Agents API key.
 
 ```hcl
 provider "cursor" {

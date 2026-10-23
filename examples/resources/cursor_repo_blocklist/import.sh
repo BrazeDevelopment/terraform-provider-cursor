@@ -1,0 +1,1 @@
+terraform import cursor_repo_blocklist.web repo_01k2ja2000e0080000000000r1
