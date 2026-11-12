@@ -3,12 +3,12 @@
 page_title: "cursor_model_access_model Resource - cursor"
 subcategory: ""
 description: |-
-  Enables or disables one model and, optionally, its parameter restrictions. Catalog ids look like claude-opus-4-6. Reads and writes return 409 until cursor_model_access_configuration has been applied. When parameters is omitted, refresh does not record the catalog parameters.
+  Enables or disables one model and, optionally, its parameter restrictions. Catalog ids look like claude-opus-4-6. The catalog entry always exists once the policy is on, so create adopts it and sets enabled and the listed parameters. Declare each model once; two declarations overwrite each other. Writes return 409 until cursor_model_access_configuration has been applied. Refresh drops the resource from state when the model leaves the catalog or the custom policy is cleared. When parameters is omitted, refresh does not record the catalog parameters. Destroy disables the model and clears the restrictions on the parameters this resource listed; to stop managing it without changing it, remove it from state instead. Import with provider_id/model_id; import records the parameters that carry a team restriction or default.
 ---
 
 # cursor_model_access_model (Resource)
 
-Enables or disables one model and, optionally, its parameter restrictions. Catalog ids look like claude-opus-4-6. Reads and writes return 409 until cursor_model_access_configuration has been applied. When parameters is omitted, refresh does not record the catalog parameters.
+Enables or disables one model and, optionally, its parameter restrictions. Catalog ids look like claude-opus-4-6. The catalog entry always exists once the policy is on, so create adopts it and sets enabled and the listed parameters. Declare each model once; two declarations overwrite each other. Writes return 409 until cursor_model_access_configuration has been applied. Refresh drops the resource from state when the model leaves the catalog or the custom policy is cleared. When parameters is omitted, refresh does not record the catalog parameters. Destroy disables the model and clears the restrictions on the parameters this resource listed; to stop managing it without changing it, remove it from state instead. Import with provider_id/model_id; import records the parameters that carry a team restriction or default.
 
 ## Example Usage
 
@@ -33,7 +33,7 @@ resource "cursor_model_access_model" "opus" {
 
 ### Optional
 
-- `parameters` (Attributes List) Per-parameter allowed values and default. Omitted parameters are left unchanged. Null allowed_values clears a restriction. (see [below for nested schema](#nestedatt--parameters))
+- `parameters` (Attributes List) Per-parameter allowed values and default. Parameters that were never listed are left unchanged. Removing a parameter from the list clears its restriction and default. Null allowed_values clears a restriction. Parameter ids must be unique. (see [below for nested schema](#nestedatt--parameters))
 
 ### Read-Only
 
@@ -49,7 +49,7 @@ Required:
 
 Optional:
 
-- `allowed_values` (List of String) Values members may pick. Null clears the restriction.
+- `allowed_values` (List of String) Values members may pick. Null clears the restriction. Order is not significant.
 - `default_value` (String) Team default. Null restores the catalog default.
 
 ## Import
@@ -59,5 +59,6 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
+# Import as <provider_id>/<model_id>.
 terraform import cursor_model_access_model.opus anthropic/claude-opus-4-6
 ```

@@ -3,12 +3,12 @@
 page_title: "cursor_model_access_configuration Resource - cursor"
 subcategory: ""
 description: |-
-  Manages the team's model-access policy. The first apply turns the policy on and seeds the catalog. Provider and model resources return 409 until this resource has been applied. Destroying it sends state unrestricted, which clears the custom policy. deletion_protection defaults to true. Organization Groups can still allow a model the team policy disables; this API is the team baseline. These ids are Admin catalog ids, a different space from automation model slugs.
+  Manages the team's model-access policy. The policy is a singleton: declare this resource once per team, because two declarations overwrite each other. The first apply turns the policy on and seeds the catalog. When a custom policy already exists, create adopts it and sets the two defaults. Provider and model resources return 409 until this resource has been applied. Destroying it sends state unrestricted, which clears the custom policy together with every provider and model setting. deletion_protection defaults to true. When the policy is switched back to unrestricted or legacy outside Terraform, refresh drops the resource from state and the next plan creates it again. Import with the team id or the literal team; import fails when the team has no custom policy. Organization Groups can still allow a model the team policy disables; this API is the team baseline. These ids are Admin catalog ids, a different space from automation model slugs.
 ---
 
 # cursor_model_access_configuration (Resource)
 
-Manages the team's model-access policy. The first apply turns the policy on and seeds the catalog. Provider and model resources return 409 until this resource has been applied. Destroying it sends state unrestricted, which clears the custom policy. deletion_protection defaults to true. Organization Groups can still allow a model the team policy disables; this API is the team baseline. These ids are Admin catalog ids, a different space from automation model slugs.
+Manages the team's model-access policy. The policy is a singleton: declare this resource once per team, because two declarations overwrite each other. The first apply turns the policy on and seeds the catalog. When a custom policy already exists, create adopts it and sets the two defaults. Provider and model resources return 409 until this resource has been applied. Destroying it sends state unrestricted, which clears the custom policy together with every provider and model setting. deletion_protection defaults to true. When the policy is switched back to unrestricted or legacy outside Terraform, refresh drops the resource from state and the next plan creates it again. Import with the team id or the literal team; import fails when the team has no custom policy. Organization Groups can still allow a model the team policy disables; this API is the team baseline. These ids are Admin catalog ids, a different space from automation model slugs.
 
 ## Example Usage
 
@@ -35,7 +35,7 @@ resource "cursor_model_access_configuration" "team" {
 ### Read-Only
 
 - `id` (String) Team id as a string.
-- `state` (String) unrestricted, custom, or legacy.
+- `state` (String) custom while this resource exists. unrestricted and legacy mean there is no custom policy.
 - `team_id` (Number) Team id implied by the API key.
 
 ## Import
@@ -45,5 +45,6 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
+# The policy is a team singleton. Import it with the literal "team" or the team id of the configured team_api_key.
 terraform import cursor_model_access_configuration.team team
 ```

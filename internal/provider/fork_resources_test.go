@@ -745,6 +745,8 @@ func TestDirectoryGroupClearsLimitAndBlocklist(t *testing.T) {
 		case r.Method == http.MethodPatch:
 			patchBody = string(raw)
 			_, _ = io.WriteString(w, `{"group":{"id":"team_group_1","name":"Eng","memberCount":0,"monthlySpendingLimitDollars":null}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/settings/repo-blocklists/repos":
+			_, _ = io.WriteString(w, `{"repos":[]}`)
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "upsert"):
 			_, _ = io.WriteString(w, `{"repos":[{"id":"repo_123","url":"https://github.com/acme/api","patterns":["*.env"]}]}`)
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "repo_123"):

@@ -3,12 +3,12 @@
 page_title: "cursor_repo_blocklist Resource - cursor"
 subcategory: ""
 description: |-
-  Manages the blocklist patterns for one repository URL. Upsert replaces patterns for that repository and leaves every other repository alone. Delete uses the repo_ id from the read. Blocklists apply to the editor and CLI, not to Cloud Agents or automations.
+  Manages the blocklist patterns for one repository URL. Declare each repository once. Create fails when the repository already has a blocklist entry; import the resource to manage an existing entry. Upsert replaces patterns for that repository and leaves every other repository alone. Refresh drops the resource from state when the entry is gone, and follows the entry by URL when it was recreated under a new id. Delete uses the repo_ id from the read. Import with the repo_ id or the repository URL. Blocklists apply to the editor and CLI, not to Cloud Agents or automations.
 ---
 
 # cursor_repo_blocklist (Resource)
 
-Manages the blocklist patterns for one repository URL. Upsert replaces patterns for that repository and leaves every other repository alone. Delete uses the repo_ id from the read. Blocklists apply to the editor and CLI, not to Cloud Agents or automations.
+Manages the blocklist patterns for one repository URL. Declare each repository once. Create fails when the repository already has a blocklist entry; import the resource to manage an existing entry. Upsert replaces patterns for that repository and leaves every other repository alone. Refresh drops the resource from state when the entry is gone, and follows the entry by URL when it was recreated under a new id. Delete uses the repo_ id from the read. Import with the repo_ id or the repository URL. Blocklists apply to the editor and CLI, not to Cloud Agents or automations.
 
 ## Example Usage
 
@@ -24,8 +24,8 @@ resource "cursor_repo_blocklist" "web" {
 
 ### Required
 
-- `patterns` (List of String) File patterns to block. * blocks the entire repository.
-- `url` (String) Repository URL.
+- `patterns` (List of String) File patterns to block, at least one. * blocks the entire repository. Order is not significant.
+- `url` (String) Repository URL. Changing it to a different repository replaces the resource; scheme, letter case, and a trailing .git are not significant.
 
 ### Read-Only
 
@@ -38,5 +38,9 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
+# Import by the repo_ id from the blocklist list.
 terraform import cursor_repo_blocklist.web repo_01k2ja2000e0080000000000r1
+
+# Or import by the repository URL.
+terraform import cursor_repo_blocklist.web https://github.com/example-org/web
 ```

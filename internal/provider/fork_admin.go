@@ -492,10 +492,8 @@ func (c *apiClient) upsertRepoBlocklist(ctx context.Context, repoURL string, pat
 	if err := c.adminDo(ctx, "Team Admin API", c.teamAPIKey, http.MethodPost, "/settings/repo-blocklists/repos/upsert", payload, &out, http.StatusOK); err != nil {
 		return nil, err
 	}
-	for _, repo := range out.Repos {
-		if repo.URL == repoURL {
-			return &repo, nil
-		}
+	if repo := findRepoBlocklistByURL(out.Repos, repoURL); repo != nil {
+		return repo, nil
 	}
 	if len(out.Repos) == 1 {
 		return &out.Repos[0], nil

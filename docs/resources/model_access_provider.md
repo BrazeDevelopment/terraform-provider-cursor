@@ -3,12 +3,12 @@
 page_title: "cursor_model_access_provider Resource - cursor"
 subcategory: ""
 description: |-
-  Enables or disables one model-access provider. Catalog ids look like anthropic. Reads and writes return 409 while configuration state is unrestricted or legacy; apply cursor_model_access_configuration first.
+  Enables or disables one model-access provider. Catalog ids look like anthropic. The catalog entry always exists once the policy is on, so create adopts it and sets enabled. Declare each provider once; two declarations overwrite each other. Writes return 409 while configuration state is unrestricted or legacy; apply cursor_model_access_configuration first. Refresh drops the resource from state when the provider leaves the catalog or the custom policy is cleared. Destroy disables the provider; to stop managing it without changing it, remove it from state instead. Import with the provider id.
 ---
 
 # cursor_model_access_provider (Resource)
 
-Enables or disables one model-access provider. Catalog ids look like anthropic. Reads and writes return 409 while configuration state is unrestricted or legacy; apply cursor_model_access_configuration first.
+Enables or disables one model-access provider. Catalog ids look like anthropic. The catalog entry always exists once the policy is on, so create adopts it and sets enabled. Declare each provider once; two declarations overwrite each other. Writes return 409 while configuration state is unrestricted or legacy; apply cursor_model_access_configuration first. Refresh drops the resource from state when the provider leaves the catalog or the custom policy is cleared. Destroy disables the provider; to stop managing it without changing it, remove it from state instead. Import with the provider id.
 
 ## Example Usage
 
@@ -41,5 +41,6 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
+# Import by the catalog provider id.
 terraform import cursor_model_access_provider.anthropic anthropic
 ```
