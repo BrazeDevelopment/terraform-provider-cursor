@@ -3,12 +3,12 @@
 page_title: "cursor_private_worker_pool Resource - cursor"
 subcategory: ""
 description: |-
-  Registers a durable private worker pool. Register returns no id; the Terraform id is team/<pool_name> or team/<pool_name>/<repo_owner>/<repo_name> (user/... when scope is user). There is no update endpoint, so every argument change replaces the pool and removes it from pickers until the new one is registered. That includes worker_ready_timeout_seconds. Deregister is a soft-delete: the pool leaves pickers, and workers already connected stay connected. Authentication uses pool_api_key, one team service-account key for every pool in the team. Automations select the pool with private_worker.labels.pool. The repo label is reserved. This is a v0 API.
+  Registers a durable private worker pool. Register returns no id; the Terraform id is team/<pool_name> or team/<pool_name>/<repo_owner>/<repo_name> (user/... when scope is user). Import uses the same id; inside a name, write / as %2F and % as %25. There is no update endpoint, so every argument change replaces the pool and removes it from pickers until the new one is registered. That includes worker_ready_timeout_seconds. The one exception is an equivalent spelling of the same repo_url, which only updates state. Deregister is a soft-delete: the pool leaves pickers, and workers already connected stay connected. Authentication uses pool_api_key, one team service-account key for every pool in the team. Automations select the pool with private_worker.labels.pool. The repo label is reserved. This is a v0 API.
 ---
 
 # cursor_private_worker_pool (Resource)
 
-Registers a durable private worker pool. Register returns no id; the Terraform id is team/<pool_name> or team/<pool_name>/<repo_owner>/<repo_name> (user/... when scope is user). There is no update endpoint, so every argument change replaces the pool and removes it from pickers until the new one is registered. That includes worker_ready_timeout_seconds. Deregister is a soft-delete: the pool leaves pickers, and workers already connected stay connected. Authentication uses pool_api_key, one team service-account key for every pool in the team. Automations select the pool with private_worker.labels.pool. The repo label is reserved. This is a v0 API.
+Registers a durable private worker pool. Register returns no id; the Terraform id is team/<pool_name> or team/<pool_name>/<repo_owner>/<repo_name> (user/... when scope is user). Import uses the same id; inside a name, write / as %2F and % as %25. There is no update endpoint, so every argument change replaces the pool and removes it from pickers until the new one is registered. That includes worker_ready_timeout_seconds. The one exception is an equivalent spelling of the same repo_url, which only updates state. Deregister is a soft-delete: the pool leaves pickers, and workers already connected stay connected. Authentication uses pool_api_key, one team service-account key for every pool in the team. Automations select the pool with private_worker.labels.pool. The repo label is reserved. This is a v0 API.
 
 ## Example Usage
 
@@ -32,13 +32,13 @@ resource "cursor_private_worker_pool" "gpu" {
 
 - `repo_name` (String) Repository name for a repo-backed pool. Set together with repo_owner.
 - `repo_owner` (String) Repository owner for a repo-backed pool. Set together with repo_name. Omit both for an any-repo pool, which routes on the pool name alone.
-- `repo_url` (String) Repository URL for display. Requires repo_owner and repo_name.
+- `repo_url` (String) Repository URL for display. Requires repo_owner and repo_name. Changing it replaces the pool, except that an equivalent spelling of the same repository only updates state.
 - `worker_ready_timeout_seconds` (Number) Seconds a claimed request waits for an offline worker to reconnect. 0 reacquires from the pool immediately. Changing this replaces the pool.
 
 ### Read-Only
 
 - `connected_worker_count` (Number) Workers currently connected to this pool.
-- `id` (String) team/<pool_name>, team/<pool_name>/<repo_owner>/<repo_name>, or the same forms with user.
+- `id` (String) team/<pool_name>, team/<pool_name>/<repo_owner>/<repo_name>, or the same forms with user. Inside a name, / is written %2F and % is written %25.
 - `in_use_worker_count` (Number) Connected workers that currently have an assigned agent.
 
 ## Import
@@ -48,5 +48,12 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
+# Any-repo pool: <scope>/<pool_name>, where scope is team or user.
 terraform import cursor_private_worker_pool.gpu team/gpu
+
+# Repo-backed pool: <scope>/<pool_name>/<repo_owner>/<repo_name>.
+terraform import cursor_private_worker_pool.api team/gpu/acme/api
+
+# Inside a name, write / as %2F and % as %25.
+terraform import cursor_private_worker_pool.nested team/ml%2Fgpu
 ```
