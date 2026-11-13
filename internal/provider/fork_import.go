@@ -67,10 +67,20 @@ func (r *repoBlocklistResource) ImportState(ctx context.Context, req resource.Im
 }
 
 func (r *groupResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	id, err := groupImportID(r.kind, req.ID, false)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 }
 
 func (r *groupMembersResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("group_id"), req, resp)
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	id, err := groupImportID(r.kind, req.ID, true)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("group_id"), id)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 }

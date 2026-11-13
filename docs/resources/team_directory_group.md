@@ -3,12 +3,12 @@
 page_title: "cursor_team_directory_group Resource - cursor"
 subcategory: ""
 description: |-
-  Manages a manual Team directory group. The API can create manual groups only. SCIM-synced groups are created by the identity provider; member changes and delete return 400 while a SCIM mapping exists. monthly_spending_limit_dollars is one limit on the group, applied to each member. Null means no limit. 0 is a zero-dollar limit. Delete requires the group to be empty, so destroy cursor_team_directory_group_members first. The id uses the team_group_ prefix.
+  Manages a manual Team directory group. The API can create manual groups only; SCIM-synced groups are created by the identity provider. A SCIM-synced group can be imported to manage its spending limit, but the API returns 400 on its member changes and on delete while a SCIM mapping exists, and nothing in the API response marks a group as SCIM-synced. monthly_spending_limit_dollars is one limit on the group, applied to each member. Null means no limit. 0 is a zero-dollar limit. Group names are unique among the team's active groups, so create fails when the name is taken; import the existing group instead. Delete requires the group to be empty, so destroy cursor_team_directory_group_members first. Refresh drops the resource from state when the group no longer exists. The id uses the team_group_ prefix. Import with that id or with the grp_ public id.
 ---
 
 # cursor_team_directory_group (Resource)
 
-Manages a manual Team directory group. The API can create manual groups only. SCIM-synced groups are created by the identity provider; member changes and delete return 400 while a SCIM mapping exists. monthly_spending_limit_dollars is one limit on the group, applied to each member. Null means no limit. 0 is a zero-dollar limit. Delete requires the group to be empty, so destroy cursor_team_directory_group_members first. The id uses the team_group_ prefix.
+Manages a manual Team directory group. The API can create manual groups only; SCIM-synced groups are created by the identity provider. A SCIM-synced group can be imported to manage its spending limit, but the API returns 400 on its member changes and on delete while a SCIM mapping exists, and nothing in the API response marks a group as SCIM-synced. monthly_spending_limit_dollars is one limit on the group, applied to each member. Null means no limit. 0 is a zero-dollar limit. Group names are unique among the team's active groups, so create fails when the name is taken; import the existing group instead. Delete requires the group to be empty, so destroy cursor_team_directory_group_members first. Refresh drops the resource from state when the group no longer exists. The id uses the team_group_ prefix. Import with that id or with the grp_ public id.
 
 ## Example Usage
 
@@ -24,16 +24,17 @@ resource "cursor_team_directory_group" "eng" {
 
 ### Required
 
-- `name` (String) Group name.
+- `name` (String) Group name. Must not be empty or start or end with whitespace. Unique among the active groups of the team.
 
 ### Optional
 
-- `monthly_spending_limit_dollars` (Number) Monthly spending limit in whole dollars for each member. Null means no limit and sends clearMonthlySpendingLimitDollars. 0 is a zero-dollar limit.
+- `monthly_spending_limit_dollars` (Number) Monthly spending limit in whole dollars for each member, from 0 to 2147483647. Null means no limit; removing the attribute sends clearMonthlySpendingLimitDollars. 0 is a zero-dollar limit.
 
 ### Read-Only
 
 - `id` (String) Group id.
-- `member_count` (Number) Number of members.
+- `member_count` (Number) Number of members at the last refresh.
+- `public_id` (String) Public id with the grp_ prefix. Origin grants use this value.
 
 ## Import
 
@@ -42,5 +43,9 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
+# Import by the group id, which uses the team_group_ prefix.
 terraform import cursor_team_directory_group.eng team_group_01k2ja2000e0080000000000g1
+
+# Or import by the group's grp_ public id.
+terraform import cursor_team_directory_group.eng grp_01k2ja2000e0080000000000g1
 ```

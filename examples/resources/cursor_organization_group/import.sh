@@ -1,1 +1,2 @@
+# Import by the group id, which uses the g_ prefix. The grp_ public id is not accepted.
 terraform import cursor_organization_group.eng g_01k2ja2000e0080000000000g1
