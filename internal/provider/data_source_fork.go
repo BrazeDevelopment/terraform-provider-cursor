@@ -1,16 +1,27 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/cursor/terraform-provider-cursor/internal/publicapi"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
+
+var environmentIDValidators = []validator.String{
+	stringvalidator.RegexMatches(regexp.MustCompile(`^\S+$`), "must be an environment id with no whitespace"),
+}
 
 type apiKeyInfoDataSource struct{ client *apiClient }
 
@@ -65,21 +76,12 @@ func (d *apiKeyInfoDataSource) Read(ctx context.Context, _ datasource.ReadReques
 		APIKeyName:    types.StringValue(info.APIKeyName),
 		CreatedAt:     types.StringValue(info.CreatedAt),
 		UserID:        types.StringNull(),
-		UserEmail:     types.StringNull(),
-		UserFirstName: types.StringNull(),
-		UserLastName:  types.StringNull(),
+		UserEmail:     stringOrNull(info.UserEmail),
+		UserFirstName: stringOrNull(info.UserFirstName),
+		UserLastName:  stringOrNull(info.UserLastName),
 	}
 	if info.UserID != nil {
 		model.UserID = types.StringValue(strconv.FormatInt(*info.UserID, 10))
-	}
-	if info.UserEmail != "" {
-		model.UserEmail = types.StringValue(info.UserEmail)
-	}
-	if info.UserFirstName != "" {
-		model.UserFirstName = types.StringValue(info.UserFirstName)
-	}
-	if info.UserLastName != "" {
-		model.UserLastName = types.StringValue(info.UserLastName)
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
@@ -107,18 +109,18 @@ func (d *teamMembersDataSource) Metadata(_ context.Context, req datasource.Metad
 
 func (d *teamMembersDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Reads Admin API team members. role is member or owner. There is no admin value. Use a lifecycle precondition, not a check block, to fail the plan when membership does not match the approved list.",
+		Description: "Reads Admin API team members with the provider team_api_key. role is member or owner. There is no admin value. Use a lifecycle precondition, not a check block, to fail the plan when membership does not match the approved list.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{Computed: true, Description: "team."},
 			"members": schema.ListNestedAttribute{
 				Computed:    true,
-				Description: "Team members, including removed members.",
+				Description: "Team members, including removed members, sorted by email and then id. Empty when the team has no members.",
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
-					"id":         schema.StringAttribute{Computed: true},
-					"email":      schema.StringAttribute{Computed: true},
-					"name":       schema.StringAttribute{Computed: true},
+					"id":         schema.StringAttribute{Computed: true, Description: "Member id."},
+					"email":      schema.StringAttribute{Computed: true, Description: "Member email."},
+					"name":       schema.StringAttribute{Computed: true, Description: "Member display name."},
 					"role":       schema.StringAttribute{Computed: true, Description: "member or owner."},
-					"is_removed": schema.BoolAttribute{Computed: true},
+					"is_removed": schema.BoolAttribute{Computed: true, Description: "True for a member who was removed from the team. Removed members stay in the list."},
 				}},
 			},
 		},
@@ -131,7 +133,7 @@ func (d *teamMembersDataSource) Configure(_ context.Context, req datasource.Conf
 
 func (d *teamMembersDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
 	if d.client == nil {
-		resp.Diagnostics.AddError("Provider not configured", "Team Admin API client is unavailable.")
+		resp.Diagnostics.AddError("Provider not configured", fmt.Sprintf("team_api_key is required; set the provider team_api_key attribute or %s", envTeamAPIKey))
 		return
 	}
 	members, err := d.client.listTeamMemberRecords(ctx)
@@ -139,7 +141,7 @@ func (d *teamMembersDataSource) Read(ctx context.Context, _ datasource.ReadReque
 		resp.Diagnostics.AddError("Failed to read team members", err.Error())
 		return
 	}
-	model := teamMembersModel{ID: types.StringValue("team")}
+	model := teamMembersModel{ID: types.StringValue("team"), Members: make([]teamMemberModel, 0, len(members))}
 	for _, member := range members {
 		model.Members = append(model.Members, teamMemberModel{
 			ID:        types.StringValue(member.ID),
@@ -149,6 +151,12 @@ func (d *teamMembersDataSource) Read(ctx context.Context, _ datasource.ReadReque
 			IsRemoved: types.BoolValue(member.IsRemoved),
 		})
 	}
+	slices.SortStableFunc(model.Members, func(a, b teamMemberModel) int {
+		return cmp.Or(
+			cmp.Compare(strings.ToLower(a.Email.ValueString()), strings.ToLower(b.Email.ValueString())),
+			cmp.Compare(a.ID.ValueString(), b.ID.ValueString()),
+		)
+	})
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
@@ -164,6 +172,8 @@ type environmentDataModel struct {
 	VersionID       types.String           `tfsdk:"version_id"`
 	RepoFileURL     types.String           `tfsdk:"repo_file_url"`
 	RepoFilePath    types.String           `tfsdk:"repo_file_path"`
+	CreatedAt       types.String           `tfsdk:"created_at"`
+	UpdatedAt       types.String           `tfsdk:"updated_at"`
 }
 
 func NewEnvironmentDataSource() datasource.DataSource { return &environmentDataSource{} }
@@ -174,20 +184,23 @@ func (d *environmentDataSource) Metadata(_ context.Context, req datasource.Metad
 
 func (d *environmentDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Reads one Cloud Agent environment, including environmentJson and versionId. List items omit those fields.",
+		Description: "Reads one Cloud Agent environment, including environmentJson and versionId. List items omit those fields. An environment that does not exist, or that the provider api_key cannot see, fails the read.",
 		Attributes: map[string]schema.Attribute{
-			"id":               schema.StringAttribute{Computed: true},
-			"environment_id":   schema.StringAttribute{Required: true, Description: "Environment UUID."},
-			"name":             schema.StringAttribute{Computed: true},
-			"owner":            schema.StringAttribute{Computed: true},
-			"environment_json": schema.StringAttribute{Computed: true},
-			"version_id":       schema.StringAttribute{Computed: true},
-			"repo_file_url":    schema.StringAttribute{Computed: true, Description: "Set when the environment loads its configuration from a file in a repository."},
-			"repo_file_path":   schema.StringAttribute{Computed: true},
+			"id":               schema.StringAttribute{Computed: true, Description: "Environment UUID. Same as environment_id."},
+			"environment_id":   schema.StringAttribute{Required: true, Description: "Environment UUID.", Validators: environmentIDValidators},
+			"name":             schema.StringAttribute{Computed: true, Description: "Display name. Null when the environment has no name."},
+			"owner":            schema.StringAttribute{Computed: true, Description: "team or personal."},
+			"environment_json": schema.StringAttribute{Computed: true, Description: "The latest saved environment.json as a JSON string. Null when the API returns none."},
+			"version_id":       schema.StringAttribute{Computed: true, Description: "Id of the latest saved environment version. Null when no version has been saved."},
+			"repo_file_url":    schema.StringAttribute{Computed: true, Description: "Repository that holds the configuration file. Set when the environment loads its configuration from a file in a repository, null otherwise."},
+			"repo_file_path":   schema.StringAttribute{Computed: true, Description: "Path of the configuration file in that repository. Null unless repo_file_url is set."},
+			"created_at":       schema.StringAttribute{Computed: true, Description: "When the environment was created."},
+			"updated_at":       schema.StringAttribute{Computed: true, Description: "When the environment was last updated."},
 			"repos": schema.ListNestedAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Repositories in the environment, in the order the API returns them. Empty for an environment without repositories.",
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
-					"url": schema.StringAttribute{Computed: true},
+					"url": schema.StringAttribute{Computed: true, Description: "Repository URL."},
 				}},
 			},
 		},
@@ -209,39 +222,52 @@ func (d *environmentDataSource) Read(ctx context.Context, req datasource.ReadReq
 		resp.Diagnostics.AddError("Provider not configured", err.Error())
 		return
 	}
-	env, err := client.GetEnvironment(ctx, cfg.EnvironmentID.ValueString())
+	id := cfg.EnvironmentID.ValueString()
+	env, err := client.GetEnvironment(ctx, id)
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to read Cursor environment", err.Error())
+		addEnvironmentReadError(&resp.Diagnostics, "Failed to read Cursor environment", id, err)
+		return
+	}
+	if env.ID == "" {
+		resp.Diagnostics.AddError("Failed to read Cursor environment", fmt.Sprintf("The API response for environment %q did not include an id.", id))
 		return
 	}
 	model := environmentDataFromAPI(env)
+	model.EnvironmentID = cfg.EnvironmentID
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
-func environmentDataFromAPI(env *publicapi.Environment) environmentDataModel {
-	repos := make([]environmentRepoModel, 0, len(env.Repos))
-	for _, repo := range env.Repos {
-		repos = append(repos, environmentRepoModel{URL: types.StringValue(repo.URL)})
+// addEnvironmentReadError names the environment when the API answers 404, which it
+// does both for an id that does not exist and for one the key cannot see.
+func addEnvironmentReadError(diags *diag.Diagnostics, summary, id string, err error) {
+	if publicapi.HasCode(err, "build_not_found") || !publicapi.IsNotFound(err) {
+		diags.AddError(summary, err.Error())
+		return
 	}
+	diags.AddAttributeError(path.Root("environment_id"), "Cursor environment not found", fmt.Sprintf("No environment with id %q is visible to the provider api_key. Either it does not exist or the key cannot access it. %s", id, err))
+}
+
+func environmentReposFromAPI(repos []publicapi.EnvironmentRepo) []environmentRepoModel {
+	out := make([]environmentRepoModel, 0, len(repos))
+	for _, repo := range repos {
+		out = append(out, environmentRepoModel{URL: types.StringValue(repo.URL)})
+	}
+	return out
+}
+
+func environmentDataFromAPI(env *publicapi.Environment) environmentDataModel {
 	model := environmentDataModel{
 		ID:              types.StringValue(env.ID),
 		EnvironmentID:   types.StringValue(env.ID),
-		Name:            types.StringNull(),
+		Name:            stringOrNull(env.Name),
 		Owner:           types.StringValue(env.Owner),
-		Repos:           repos,
-		EnvironmentJSON: types.StringNull(),
-		VersionID:       types.StringNull(),
+		Repos:           environmentReposFromAPI(env.Repos),
+		EnvironmentJSON: stringOrNull(env.EnvironmentJSON),
+		VersionID:       stringOrNull(env.VersionID),
 		RepoFileURL:     types.StringNull(),
 		RepoFilePath:    types.StringNull(),
-	}
-	if env.Name != "" {
-		model.Name = types.StringValue(env.Name)
-	}
-	if env.EnvironmentJSON != "" {
-		model.EnvironmentJSON = types.StringValue(env.EnvironmentJSON)
-	}
-	if env.VersionID != "" {
-		model.VersionID = types.StringValue(env.VersionID)
+		CreatedAt:       types.StringValue(env.CreatedAt),
+		UpdatedAt:       types.StringValue(env.UpdatedAt),
 	}
 	if env.RepoFile != nil {
 		model.RepoFileURL = types.StringValue(env.RepoFile.URL)
@@ -253,12 +279,14 @@ func environmentDataFromAPI(env *publicapi.Environment) environmentDataModel {
 type environmentsDataSource struct{ client *apiClient }
 
 type environmentListItemModel struct {
-	ID        types.String           `tfsdk:"id"`
-	Name      types.String           `tfsdk:"name"`
-	Owner     types.String           `tfsdk:"owner"`
-	Repos     []environmentRepoModel `tfsdk:"repos"`
-	CreatedAt types.String           `tfsdk:"created_at"`
-	UpdatedAt types.String           `tfsdk:"updated_at"`
+	ID           types.String           `tfsdk:"id"`
+	Name         types.String           `tfsdk:"name"`
+	Owner        types.String           `tfsdk:"owner"`
+	Repos        []environmentRepoModel `tfsdk:"repos"`
+	RepoFileURL  types.String           `tfsdk:"repo_file_url"`
+	RepoFilePath types.String           `tfsdk:"repo_file_path"`
+	CreatedAt    types.String           `tfsdk:"created_at"`
+	UpdatedAt    types.String           `tfsdk:"updated_at"`
 }
 
 type environmentsModel struct {
@@ -274,20 +302,27 @@ func (d *environmentsDataSource) Metadata(_ context.Context, req datasource.Meta
 
 func (d *environmentsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Lists Cloud Agent environments, following nextCursor until it is absent. A page can be shorter than the limit. An environment updated during the walk can move to the front, so a later page can skip it or repeat another. The data source returns the walk it completed. List items omit environmentJson and versionId.",
+		Description: "Lists the Cloud Agent environments the provider api_key can access, following nextCursor until it is absent. A page can be shorter than the limit. An environment updated during the walk moves to the front, so a later page can skip it or repeat another; a repeated environment is returned once, and the data source returns the walk it completed. For a key that is neither a team admin nor a service account, the API can also leave out team environments it has not finished checking. List items omit environmentJson and versionId.",
 		Attributes: map[string]schema.Attribute{
-			"id": schema.StringAttribute{Computed: true},
+			"id": schema.StringAttribute{Computed: true, Description: "environments."},
 			"environments": schema.ListNestedAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Environments, sorted by id so that an update to one environment does not reorder the list. Empty when the key can access none.",
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
-					"id":         schema.StringAttribute{Computed: true},
-					"name":       schema.StringAttribute{Computed: true},
-					"owner":      schema.StringAttribute{Computed: true},
-					"created_at": schema.StringAttribute{Computed: true},
-					"updated_at": schema.StringAttribute{Computed: true},
-					"repos": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
-						"url": schema.StringAttribute{Computed: true},
-					}}},
+					"id":             schema.StringAttribute{Computed: true, Description: "Environment UUID."},
+					"name":           schema.StringAttribute{Computed: true, Description: "Display name. Null when the environment has no name."},
+					"owner":          schema.StringAttribute{Computed: true, Description: "team or personal."},
+					"repo_file_url":  schema.StringAttribute{Computed: true, Description: "Repository that holds the configuration file. Set when the environment loads its configuration from a file in a repository, null otherwise."},
+					"repo_file_path": schema.StringAttribute{Computed: true, Description: "Path of the configuration file in that repository. Null unless repo_file_url is set."},
+					"created_at":     schema.StringAttribute{Computed: true, Description: "When the environment was created."},
+					"updated_at":     schema.StringAttribute{Computed: true, Description: "When the environment was last updated."},
+					"repos": schema.ListNestedAttribute{
+						Computed:    true,
+						Description: "Repositories in the environment, in the order the API returns them. Empty for an environment without repositories.",
+						NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
+							"url": schema.StringAttribute{Computed: true, Description: "Repository URL."},
+						}},
+					},
 				}},
 			},
 		},
@@ -309,23 +344,29 @@ func (d *environmentsDataSource) Read(ctx context.Context, _ datasource.ReadRequ
 		resp.Diagnostics.AddError("Failed to list Cursor environments", err.Error())
 		return
 	}
-	model := environmentsModel{ID: types.StringValue("environments")}
+	model := environmentsModel{ID: types.StringValue("environments"), Environments: make([]environmentListItemModel, 0, len(envs))}
 	for _, env := range envs {
 		item := environmentListItemModel{
-			ID:        types.StringValue(env.ID),
-			Name:      types.StringNull(),
-			Owner:     types.StringValue(env.Owner),
-			CreatedAt: types.StringValue(env.CreatedAt),
-			UpdatedAt: types.StringValue(env.UpdatedAt),
+			ID:           types.StringValue(env.ID),
+			Name:         stringOrNull(env.Name),
+			Owner:        types.StringValue(env.Owner),
+			Repos:        environmentReposFromAPI(env.Repos),
+			RepoFileURL:  types.StringNull(),
+			RepoFilePath: types.StringNull(),
+			CreatedAt:    types.StringValue(env.CreatedAt),
+			UpdatedAt:    types.StringValue(env.UpdatedAt),
 		}
-		if env.Name != "" {
-			item.Name = types.StringValue(env.Name)
-		}
-		for _, repo := range env.Repos {
-			item.Repos = append(item.Repos, environmentRepoModel{URL: types.StringValue(repo.URL)})
+		if env.RepoFile != nil {
+			item.RepoFileURL = types.StringValue(env.RepoFile.URL)
+			item.RepoFilePath = types.StringValue(env.RepoFile.Path)
 		}
 		model.Environments = append(model.Environments, item)
 	}
+	// The API lists the most recently updated environment first, so its order
+	// changes whenever any environment is edited.
+	slices.SortStableFunc(model.Environments, func(a, b environmentListItemModel) int {
+		return cmp.Compare(a.ID.ValueString(), b.ID.ValueString())
+	})
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
@@ -349,13 +390,13 @@ func (d *environmentActiveBuildDataSource) Metadata(_ context.Context, req datas
 
 func (d *environmentActiveBuildDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Reads what an agent boots from. type is build or universal_image. universal_image means Cursor's default image and has no status. For a build, status comes from GET /v1/environments/{id}/builds/{buildId} and is IN_PROGRESS, SUCCEEDED, FAILED, CANCELLED, or SKIPPED. A configuration change starts that build asynchronously, so a precondition on status cannot pass in the same apply that changed the environment.",
+		Description: "Reads what an agent boots from. type is build or universal_image. universal_image means Cursor's default image and has no status. For a build, status comes from GET /v1/environments/{id}/builds/{buildId} and is IN_PROGRESS, SUCCEEDED, FAILED, CANCELLED, or SKIPPED. A configuration change starts that build asynchronously, so a precondition on status cannot pass in the same apply that changed the environment. An environment that does not exist, or that the provider api_key cannot see, fails the read.",
 		Attributes: map[string]schema.Attribute{
-			"id":             schema.StringAttribute{Computed: true},
-			"environment_id": schema.StringAttribute{Required: true},
-			"type":           schema.StringAttribute{Computed: true},
-			"build_id":       schema.StringAttribute{Computed: true},
-			"status":         schema.StringAttribute{Computed: true},
+			"id":             schema.StringAttribute{Computed: true, Description: "Environment UUID. Same as environment_id."},
+			"environment_id": schema.StringAttribute{Required: true, Description: "Environment UUID.", Validators: environmentIDValidators},
+			"type":           schema.StringAttribute{Computed: true, Description: "build or universal_image."},
+			"build_id":       schema.StringAttribute{Computed: true, Description: "Id of the active build. Null when type is universal_image."},
+			"status":         schema.StringAttribute{Computed: true, Description: "Status of the active build: IN_PROGRESS, SUCCEEDED, FAILED, CANCELLED, or SKIPPED. Null when type is universal_image."},
 		},
 	}
 }
@@ -375,13 +416,18 @@ func (d *environmentActiveBuildDataSource) Read(ctx context.Context, req datasou
 		resp.Diagnostics.AddError("Provider not configured", err.Error())
 		return
 	}
-	active, err := client.GetActiveBuild(ctx, cfg.EnvironmentID.ValueString())
+	id := cfg.EnvironmentID.ValueString()
+	active, err := client.GetActiveBuild(ctx, id)
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to read active environment build", err.Error())
+		addEnvironmentReadError(&resp.Diagnostics, "Failed to read active environment build", id, err)
+		return
+	}
+	if active.Type == "" {
+		resp.Diagnostics.AddError("Failed to read active environment build", fmt.Sprintf("The API response for environment %q did not include a type.", id))
 		return
 	}
 	model := environmentActiveBuildModel{
-		ID:            types.StringValue(cfg.EnvironmentID.ValueString()),
+		ID:            types.StringValue(id),
 		EnvironmentID: cfg.EnvironmentID,
 		Type:          types.StringValue(active.Type),
 		BuildID:       types.StringNull(),
@@ -389,12 +435,12 @@ func (d *environmentActiveBuildDataSource) Read(ctx context.Context, req datasou
 	}
 	if active.Type == "build" && active.BuildID != "" {
 		model.BuildID = types.StringValue(active.BuildID)
-		build, err := client.GetBuild(ctx, cfg.EnvironmentID.ValueString(), active.BuildID)
+		build, err := client.GetBuild(ctx, id, active.BuildID)
 		if err != nil {
-			resp.Diagnostics.AddError("Failed to read environment build", err.Error())
+			addEnvironmentReadError(&resp.Diagnostics, "Failed to read environment build", id, err)
 			return
 		}
-		model.Status = types.StringValue(build.Status)
+		model.Status = stringOrNull(build.Status)
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
@@ -448,31 +494,48 @@ func (d *modelsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 	resp.Schema = schema.Schema{
 		Description: "Reads GET /v1/models, the catalog of model.id values accepted by POST /v1/agents, including parameters and variants. Do not use it to validate automation model or Admin model-access ids until Cursor confirms the catalogs are the same.",
 		Attributes: map[string]schema.Attribute{
-			"id": schema.StringAttribute{Computed: true},
+			"id": schema.StringAttribute{Computed: true, Description: "models."},
 			"models": schema.ListNestedAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Models, sorted by id. Lists inside a model keep the order the API returns and are empty, not null, when the API returns none.",
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
-					"id":           schema.StringAttribute{Computed: true},
-					"display_name": schema.StringAttribute{Computed: true},
-					"description":  schema.StringAttribute{Computed: true},
-					"aliases":      schema.ListAttribute{ElementType: types.StringType, Computed: true},
-					"parameters": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
-						"id":           schema.StringAttribute{Computed: true},
-						"display_name": schema.StringAttribute{Computed: true},
-						"values": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
-							"value":        schema.StringAttribute{Computed: true},
-							"display_name": schema.StringAttribute{Computed: true},
-						}}},
-					}}},
-					"variants": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
-						"display_name": schema.StringAttribute{Computed: true},
-						"description":  schema.StringAttribute{Computed: true},
-						"is_default":   schema.BoolAttribute{Computed: true},
-						"params": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
-							"id":    schema.StringAttribute{Computed: true},
-							"value": schema.StringAttribute{Computed: true},
-						}}},
-					}}},
+					"id":           schema.StringAttribute{Computed: true, Description: "Model id, the value POST /v1/agents accepts as model.id."},
+					"display_name": schema.StringAttribute{Computed: true, Description: "Human-readable model name."},
+					"description":  schema.StringAttribute{Computed: true, Description: "Model description. Null when the API returns none."},
+					"aliases":      schema.ListAttribute{ElementType: types.StringType, Computed: true, Description: "Alternate ids that resolve to the same model."},
+					"parameters": schema.ListNestedAttribute{
+						Computed:    true,
+						Description: "Parameters the model accepts.",
+						NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
+							"id":           schema.StringAttribute{Computed: true, Description: "Parameter id."},
+							"display_name": schema.StringAttribute{Computed: true, Description: "Human-readable parameter name. Null when the API returns none."},
+							"values": schema.ListNestedAttribute{
+								Computed:    true,
+								Description: "Values the parameter accepts.",
+								NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
+									"value":        schema.StringAttribute{Computed: true, Description: "Permitted value."},
+									"display_name": schema.StringAttribute{Computed: true, Description: "Human-readable label for the value. Null when the API returns none."},
+								}},
+							},
+						}},
+					},
+					"variants": schema.ListNestedAttribute{
+						Computed:    true,
+						Description: "Combinations of the model id and parameter values that the model accepts.",
+						NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
+							"display_name": schema.StringAttribute{Computed: true, Description: "Human-readable variant name."},
+							"description":  schema.StringAttribute{Computed: true, Description: "Variant description. Null when the API returns none."},
+							"is_default":   schema.BoolAttribute{Computed: true, Description: "True for the variant Cursor selects when the model is chosen without parameters."},
+							"params": schema.ListNestedAttribute{
+								Computed:    true,
+								Description: "Parameter values of the variant. Can be empty.",
+								NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
+									"id":    schema.StringAttribute{Computed: true, Description: "Parameter id."},
+									"value": schema.StringAttribute{Computed: true, Description: "Parameter value."},
+								}},
+							},
+						}},
+					},
 				}},
 			},
 		},
@@ -494,7 +557,7 @@ func (d *modelsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, r
 		resp.Diagnostics.AddError("Failed to list models", err.Error())
 		return
 	}
-	state := modelsModel{ID: types.StringValue("models")}
+	state := modelsModel{ID: types.StringValue("models"), Models: make([]modelDataModel, 0, len(models))}
 	for _, model := range models {
 		aliases := model.Aliases
 		if aliases == nil {
@@ -505,34 +568,28 @@ func (d *modelsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, r
 		item := modelDataModel{
 			ID:          types.StringValue(model.ID),
 			DisplayName: types.StringValue(model.DisplayName),
-			Description: types.StringNull(),
+			Description: stringOrNull(model.Description),
 			Aliases:     aliasList,
-		}
-		if model.Description != "" {
-			item.Description = types.StringValue(model.Description)
+			Parameters:  make([]modelParameterDataModel, 0, len(model.Parameters)),
+			Variants:    make([]modelVariantModel, 0, len(model.Variants)),
 		}
 		for _, param := range model.Parameters {
-			p := modelParameterDataModel{ID: types.StringValue(param.ID), DisplayName: types.StringNull()}
-			if param.DisplayName != "" {
-				p.DisplayName = types.StringValue(param.DisplayName)
+			p := modelParameterDataModel{
+				ID:          types.StringValue(param.ID),
+				DisplayName: stringOrNull(param.DisplayName),
+				Values:      make([]modelParameterValueModel, 0, len(param.Values)),
 			}
 			for _, value := range param.Values {
-				v := modelParameterValueModel{Value: types.StringValue(value.Value), DisplayName: types.StringNull()}
-				if value.DisplayName != "" {
-					v.DisplayName = types.StringValue(value.DisplayName)
-				}
-				p.Values = append(p.Values, v)
+				p.Values = append(p.Values, modelParameterValueModel{Value: types.StringValue(value.Value), DisplayName: stringOrNull(value.DisplayName)})
 			}
 			item.Parameters = append(item.Parameters, p)
 		}
 		for _, variant := range model.Variants {
 			v := modelVariantModel{
 				DisplayName: types.StringValue(variant.DisplayName),
-				Description: types.StringNull(),
+				Description: stringOrNull(variant.Description),
 				IsDefault:   types.BoolValue(variant.IsDefault),
-			}
-			if variant.Description != "" {
-				v.Description = types.StringValue(variant.Description)
+				Params:      make([]modelVariantParamModel, 0, len(variant.Params)),
 			}
 			for _, param := range variant.Params {
 				v.Params = append(v.Params, modelVariantParamModel{ID: types.StringValue(param.ID), Value: types.StringValue(param.Value)})
@@ -541,6 +598,12 @@ func (d *modelsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, r
 		}
 		state.Models = append(state.Models, item)
 	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	slices.SortStableFunc(state.Models, func(a, b modelDataModel) int {
+		return cmp.Compare(a.ID.ValueString(), b.ID.ValueString())
+	})
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -575,22 +638,30 @@ func (d *privateWorkerPoolsDataSource) Metadata(_ context.Context, req datasourc
 
 func (d *privateWorkerPoolsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Lists private worker pools. scope is team_pool, personal, or all. The resource scope team maps to team_pool and user maps to personal.",
+		Description: "Lists private worker pools with the provider pool_api_key. The list filter is team_pool, personal, or all. cursor_private_worker_pool names the same scopes team and user; the data source accepts those too and sends team_pool and personal.",
 		Attributes: map[string]schema.Attribute{
-			"id":    schema.StringAttribute{Computed: true},
-			"scope": schema.StringAttribute{Optional: true, Description: "team_pool, personal, or all. Defaults to all."},
-			"pools": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
-				"id":                           schema.StringAttribute{Computed: true},
-				"scope":                        schema.StringAttribute{Computed: true},
-				"pool_name":                    schema.StringAttribute{Computed: true},
-				"repo_owner":                   schema.StringAttribute{Computed: true},
-				"repo_name":                    schema.StringAttribute{Computed: true},
-				"repo_url":                     schema.StringAttribute{Computed: true},
-				"connected_worker_count":       schema.Int64Attribute{Computed: true},
-				"in_use_worker_count":          schema.Int64Attribute{Computed: true},
-				"worker_ready_timeout_seconds": schema.Int64Attribute{Computed: true},
-				"is_stale":                     schema.BoolAttribute{Computed: true},
-			}}},
+			"id": schema.StringAttribute{Computed: true, Description: "The list filter that was sent: team_pool, personal, or all."},
+			"scope": schema.StringAttribute{
+				Optional:    true,
+				Description: "team_pool, personal, or all. Defaults to all. team is accepted for team_pool and user for personal.",
+				Validators:  []validator.String{stringvalidator.OneOf("team_pool", "personal", "all", "team", "user")},
+			},
+			"pools": schema.ListNestedAttribute{
+				Computed:    true,
+				Description: "Pools, sorted by id. Empty when no pool matches.",
+				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
+					"id":                           schema.StringAttribute{Computed: true, Description: "The id cursor_private_worker_pool uses for this pool and accepts on import: <scope>/<pool_name>, or <scope>/<pool_name>/<repo_owner>/<repo_name> for a repo-backed pool."},
+					"scope":                        schema.StringAttribute{Computed: true, Description: "team or user, the values cursor_private_worker_pool uses. Null when the API does not report a scope and the list was not filtered by one."},
+					"pool_name":                    schema.StringAttribute{Computed: true, Description: "Pool name. Automations select it with private_worker.labels.pool."},
+					"repo_owner":                   schema.StringAttribute{Computed: true, Description: "Repository owner of a repo-backed pool. Null for an any-repo pool."},
+					"repo_name":                    schema.StringAttribute{Computed: true, Description: "Repository name of a repo-backed pool. Null for an any-repo pool."},
+					"repo_url":                     schema.StringAttribute{Computed: true, Description: "Repository URL the pool was registered with. Null when the API returns none."},
+					"connected_worker_count":       schema.Int64Attribute{Computed: true, Description: "Workers currently connected to this pool."},
+					"in_use_worker_count":          schema.Int64Attribute{Computed: true, Description: "Connected workers that currently have an assigned agent."},
+					"worker_ready_timeout_seconds": schema.Int64Attribute{Computed: true, Description: "Seconds an agent waits for a worker in this pool to become ready."},
+					"is_stale":                     schema.BoolAttribute{Computed: true, Description: "True when the API reports the pool as stale."},
+				}},
+			},
 		},
 	}
 }
@@ -612,7 +683,7 @@ func (d *privateWorkerPoolsDataSource) Read(ctx context.Context, req datasource.
 	}
 	scope := "all"
 	if !cfg.Scope.IsNull() && !cfg.Scope.IsUnknown() && cfg.Scope.ValueString() != "" {
-		scope = cfg.Scope.ValueString()
+		scope = poolListScope(cfg.Scope.ValueString())
 	}
 	pools, err := client.ListPools(ctx, scope)
 	if err != nil {
@@ -621,15 +692,14 @@ func (d *privateWorkerPoolsDataSource) Read(ctx context.Context, req datasource.
 	}
 	// scope is optional and not computed, so an omitted value must stay null.
 	// The list request still uses all, which returns every pool.
-	model := privateWorkerPoolsModel{ID: types.StringValue(scope), Scope: cfg.Scope}
+	model := privateWorkerPoolsModel{ID: types.StringValue(scope), Scope: cfg.Scope, Pools: make([]privateWorkerPoolDataModel, 0, len(pools))}
 	for _, pool := range pools {
 		item := privateWorkerPoolDataModel{
-			ID:                        types.StringValue(poolTerraformID(privateWorkerPoolModel{Scope: types.StringValue(pool.Scope), PoolName: types.StringValue(pool.PoolName), RepoOwner: types.StringValue(pool.RepoOwner), RepoName: types.StringValue(pool.RepoName)})),
-			Scope:                     types.StringValue(pool.Scope),
+			Scope:                     stringOrNull(poolResourceScope(pool.Scope, scope)),
 			PoolName:                  types.StringValue(pool.PoolName),
 			RepoOwner:                 types.StringNull(),
 			RepoName:                  types.StringNull(),
-			RepoURL:                   types.StringNull(),
+			RepoURL:                   stringOrNull(pool.RepoURL),
 			ConnectedWorkerCount:      types.Int64Value(pool.ConnectedWorkerCount),
 			InUseWorkerCount:          types.Int64Value(pool.InUseWorkerCount),
 			WorkerReadyTimeoutSeconds: types.Int64Value(pool.WorkerReadyTimeoutSeconds),
@@ -639,12 +709,33 @@ func (d *privateWorkerPoolsDataSource) Read(ctx context.Context, req datasource.
 			item.RepoOwner = types.StringValue(pool.RepoOwner)
 			item.RepoName = types.StringValue(pool.RepoName)
 		}
-		if pool.RepoURL != "" {
-			item.RepoURL = types.StringValue(pool.RepoURL)
-		}
+		item.ID = types.StringValue(poolTerraformID(privateWorkerPoolModel{Scope: item.Scope, PoolName: item.PoolName, RepoOwner: item.RepoOwner, RepoName: item.RepoName}))
 		model.Pools = append(model.Pools, item)
 	}
+	slices.SortStableFunc(model.Pools, func(a, b privateWorkerPoolDataModel) int {
+		return cmp.Compare(a.ID.ValueString(), b.ID.ValueString())
+	})
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+// poolResourceScope turns the scope the list reports into the value
+// cursor_private_worker_pool uses, so a listed id matches the resource id. Which
+// spelling the list returns is not documented; both are accepted, and a pool with
+// no scope takes it from the list filter when the filter names one.
+func poolResourceScope(apiScope, listScope string) string {
+	if apiScope == "" {
+		apiScope = listScope
+	}
+	switch apiScope {
+	case "team", "team_pool":
+		return "team"
+	case "user", "personal":
+		return "user"
+	case "all":
+		return ""
+	default:
+		return apiScope
+	}
 }
 
 type privateWorkersSummaryDataSource struct{ client *apiClient }
@@ -667,13 +758,13 @@ func (d *privateWorkersSummaryDataSource) Metadata(_ context.Context, req dataso
 
 func (d *privateWorkersSummaryDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Reads connected and in-use private worker counts for the authenticated user and their team.",
+		Description: "Reads connected and in-use private worker counts for the authenticated user and their team, with the provider pool_api_key. The counts change as workers connect and take work, so a value read during plan can differ at apply.",
 		Attributes: map[string]schema.Attribute{
-			"id":                   schema.StringAttribute{Computed: true},
-			"team_total_connected": schema.Int64Attribute{Computed: true},
-			"team_in_use":          schema.Int64Attribute{Computed: true},
-			"user_total_connected": schema.Int64Attribute{Computed: true},
-			"user_in_use":          schema.Int64Attribute{Computed: true},
+			"id":                   schema.StringAttribute{Computed: true, Description: "summary."},
+			"team_total_connected": schema.Int64Attribute{Computed: true, Description: "Workers connected to the team's pools. Null when the API returns no team summary."},
+			"team_in_use":          schema.Int64Attribute{Computed: true, Description: "Connected team workers that have an assigned agent. Null when the API returns no team summary."},
+			"user_total_connected": schema.Int64Attribute{Computed: true, Description: "Workers connected to the user's pools. Null when the API returns no user summary."},
+			"user_in_use":          schema.Int64Attribute{Computed: true, Description: "Connected user workers that have an assigned agent. Null when the API returns no user summary."},
 		},
 	}
 }

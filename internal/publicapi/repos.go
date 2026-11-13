@@ -19,7 +19,14 @@ func CanonicalRepo(raw string) string {
 		}
 	}
 	for _, prefix := range []string{"https://", "http://", "ssh://", "git://"} {
-		s = strings.TrimPrefix(s, prefix)
+		if strings.HasPrefix(strings.ToLower(s), prefix) {
+			s = s[len(prefix):]
+			// ssh://git@host/owner/repo names the same repository as host/owner/repo.
+			if host, rest, ok := strings.Cut(s, "/"); ok {
+				s = host[strings.LastIndex(host, "@")+1:] + "/" + rest
+			}
+			break
+		}
 	}
 	s = strings.TrimSuffix(s, ".git")
 	s = strings.Trim(s, "/")
@@ -61,6 +68,9 @@ func RepoOwner(raw string) string {
 	for _, prefix := range []string{"https://", "http://", "ssh://", "git://"} {
 		if strings.HasPrefix(strings.ToLower(s), prefix) {
 			s = s[len(prefix):]
+			if host, rest, ok := strings.Cut(s, "/"); ok {
+				s = host[strings.LastIndex(host, "@")+1:] + "/" + rest
+			}
 			break
 		}
 	}

@@ -3,18 +3,23 @@
 page_title: "cursor_environment Data Source - cursor"
 subcategory: ""
 description: |-
-  Reads one Cloud Agent environment, including environmentJson and versionId. List items omit those fields.
+  Reads one Cloud Agent environment, including environmentJson and versionId. List items omit those fields. An environment that does not exist, or that the provider api_key cannot see, fails the read.
 ---
 
 # cursor_environment (Data Source)
 
-Reads one Cloud Agent environment, including environmentJson and versionId. List items omit those fields.
+Reads one Cloud Agent environment, including environmentJson and versionId. List items omit those fields. An environment that does not exist, or that the provider api_key cannot see, fails the read.
 
 ## Example Usage
 
 ```terraform
+# Looks up an environment that is managed outside this configuration.
 data "cursor_environment" "web" {
-  environment_id = cursor_environment.web.id
+  environment_id = var.environment_id
+}
+
+output "environment_repos" {
+  value = data.cursor_environment.web.repos[*].url
 }
 ```
 
@@ -27,18 +32,20 @@ data "cursor_environment" "web" {
 
 ### Read-Only
 
-- `environment_json` (String)
-- `id` (String) The ID of this resource.
-- `name` (String)
-- `owner` (String)
-- `repo_file_path` (String)
-- `repo_file_url` (String) Set when the environment loads its configuration from a file in a repository.
-- `repos` (Attributes List) (see [below for nested schema](#nestedatt--repos))
-- `version_id` (String)
+- `created_at` (String) When the environment was created.
+- `environment_json` (String) The latest saved environment.json as a JSON string. Null when the API returns none.
+- `id` (String) Environment UUID. Same as environment_id.
+- `name` (String) Display name. Null when the environment has no name.
+- `owner` (String) team or personal.
+- `repo_file_path` (String) Path of the configuration file in that repository. Null unless repo_file_url is set.
+- `repo_file_url` (String) Repository that holds the configuration file. Set when the environment loads its configuration from a file in a repository, null otherwise.
+- `repos` (Attributes List) Repositories in the environment, in the order the API returns them. Empty for an environment without repositories. (see [below for nested schema](#nestedatt--repos))
+- `updated_at` (String) When the environment was last updated.
+- `version_id` (String) Id of the latest saved environment version. Null when no version has been saved.
 
 <a id="nestedatt--repos"></a>
 ### Nested Schema for `repos`
 
 Read-Only:
 
-- `url` (String)
+- `url` (String) Repository URL.

@@ -2,8 +2,14 @@ package publicapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+)
+
+const (
+	maxErrorMessageBytes = 2048
+	maxRawErrorBytes     = 512
 )
 
 // Error is a Cursor public API failure. The message includes the machine-readable code and remediation text.
@@ -26,6 +32,9 @@ func (e *Error) Error() string {
 	if hint := remediation(e.Code); hint != "" {
 		msg += " " + hint
 	}
+	if e.EnvironmentID != "" {
+		msg += " Existing environment id: " + e.EnvironmentID + "."
+	}
 	if len(e.Versions) > 0 {
 		ids := make([]string, 0, len(e.Versions))
 		for _, version := range e.Versions {
@@ -40,56 +49,83 @@ func (e *Error) Error() string {
 	return msg
 }
 
+// IsNotFound reports whether err is, or wraps, an API error with HTTP status 404.
 func IsNotFound(err error) bool {
-	apiErr, ok := err.(*Error)
-	return ok && apiErr.Status == 404
+	return IsStatus(err, 404)
 }
 
+// IsStatus reports whether err is, or wraps, an API error with the given HTTP status.
 func IsStatus(err error, status int) bool {
-	apiErr, ok := err.(*Error)
-	return ok && apiErr.Status == status
+	var apiErr *Error
+	return errors.As(err, &apiErr) && apiErr.Status == status
 }
 
+// HasCode reports whether err is, or wraps, an API error with the given machine-readable code.
 func HasCode(err error, code string) bool {
-	apiErr, ok := err.(*Error)
-	return ok && apiErr.Code == code
+	var apiErr *Error
+	return errors.As(err, &apiErr) && apiErr.Code == code
 }
 
+// decodeError builds an Error from a response body. With redact set, only the
+// structured code and message fields are used and the raw body is never copied.
 func decodeError(status int, body []byte, redact bool) error {
 	apiErr := &Error{Status: status}
-	var wrapped struct {
-		Error struct {
-			Code          string                 `json:"code"`
-			Message       string                 `json:"message"`
+	var top map[string]json.RawMessage
+	if json.Unmarshal(body, &top) == nil {
+		var detail struct {
+			Code          json.RawMessage        `json:"code"`
+			Message       json.RawMessage        `json:"message"`
 			Versions      []SecretVersionSummary `json:"versions"`
 			EnvironmentID string                 `json:"environmentId"`
-		} `json:"error"`
-		Message string `json:"message"`
-		Code    string `json:"code"`
-	}
-	if json.Unmarshal(body, &wrapped) == nil {
-		apiErr.Code = strings.TrimSpace(wrapped.Error.Code)
-		apiErr.Message = strings.TrimSpace(wrapped.Error.Message)
-		apiErr.Versions = wrapped.Error.Versions
-		apiErr.EnvironmentID = wrapped.Error.EnvironmentID
+		}
+		if raw := top["error"]; len(raw) > 0 {
+			if json.Unmarshal(raw, &detail) == nil {
+				apiErr.Code = rawString(detail.Code)
+				apiErr.Message = rawString(detail.Message)
+				apiErr.Versions = detail.Versions
+				apiErr.EnvironmentID = strings.TrimSpace(detail.EnvironmentID)
+			} else {
+				apiErr.Message = rawString(raw)
+			}
+		}
 		if apiErr.Code == "" {
-			apiErr.Code = strings.TrimSpace(wrapped.Code)
+			apiErr.Code = rawString(top["code"])
 		}
 		if apiErr.Message == "" {
-			apiErr.Message = strings.TrimSpace(wrapped.Message)
+			apiErr.Message = rawString(top["message"])
 		}
 	}
+	apiErr.Code = clip(apiErr.Code, maxRawErrorBytes)
+	apiErr.Message = clip(apiErr.Message, maxErrorMessageBytes)
 	if apiErr.Message == "" && !redact {
-		text := strings.TrimSpace(string(body))
-		if len(text) > 512 {
-			text = text[:512]
-		}
-		apiErr.Message = text
+		apiErr.Message = clip(strings.TrimSpace(string(body)), maxRawErrorBytes)
 	}
 	if apiErr.Message == "" && redact {
 		apiErr.Message = "request failed"
 	}
 	return apiErr
+}
+
+// rawString returns the trimmed value of a JSON string, or "" for any other JSON type.
+func rawString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return strings.TrimSpace(s)
+}
+
+// clip shortens text to at most limit bytes of valid UTF-8. Diagnostics travel over
+// gRPC, which rejects strings that are not valid UTF-8, so a cut never ends inside
+// a multi-byte character.
+func clip(text string, limit int) string {
+	if len(text) > limit {
+		text = text[:limit]
+	}
+	return strings.ToValidUTF8(text, "")
 }
 
 func remediation(code string) string {

@@ -3,18 +3,27 @@
 page_title: "cursor_environment_active_build Data Source - cursor"
 subcategory: ""
 description: |-
-  Reads what an agent boots from. type is build or universal_image. universal_image means Cursor's default image and has no status. For a build, status comes from GET /v1/environments/{id}/builds/{buildId} and is IN_PROGRESS, SUCCEEDED, FAILED, CANCELLED, or SKIPPED. A configuration change starts that build asynchronously, so a precondition on status cannot pass in the same apply that changed the environment.
+  Reads what an agent boots from. type is build or universal_image. universal_image means Cursor's default image and has no status. For a build, status comes from GET /v1/environments/{id}/builds/{buildId} and is IN_PROGRESS, SUCCEEDED, FAILED, CANCELLED, or SKIPPED. A configuration change starts that build asynchronously, so a precondition on status cannot pass in the same apply that changed the environment. An environment that does not exist, or that the provider api_key cannot see, fails the read.
 ---
 
 # cursor_environment_active_build (Data Source)
 
-Reads what an agent boots from. type is build or universal_image. universal_image means Cursor's default image and has no status. For a build, status comes from GET /v1/environments/{id}/builds/{buildId} and is IN_PROGRESS, SUCCEEDED, FAILED, CANCELLED, or SKIPPED. A configuration change starts that build asynchronously, so a precondition on status cannot pass in the same apply that changed the environment.
+Reads what an agent boots from. type is build or universal_image. universal_image means Cursor's default image and has no status. For a build, status comes from GET /v1/environments/{id}/builds/{buildId} and is IN_PROGRESS, SUCCEEDED, FAILED, CANCELLED, or SKIPPED. A configuration change starts that build asynchronously, so a precondition on status cannot pass in the same apply that changed the environment. An environment that does not exist, or that the provider api_key cannot see, fails the read.
 
 ## Example Usage
 
 ```terraform
 data "cursor_environment_active_build" "web" {
   environment_id = cursor_environment.web.id
+}
+
+output "web_environment_build" {
+  # type is "universal_image" when no build is active; build_id and status are then null.
+  value = {
+    type     = data.cursor_environment_active_build.web.type
+    build_id = data.cursor_environment_active_build.web.build_id
+    status   = data.cursor_environment_active_build.web.status
+  }
 }
 ```
 
@@ -23,11 +32,11 @@ data "cursor_environment_active_build" "web" {
 
 ### Required
 
-- `environment_id` (String)
+- `environment_id` (String) Environment UUID.
 
 ### Read-Only
 
-- `build_id` (String)
-- `id` (String) The ID of this resource.
-- `status` (String)
-- `type` (String)
+- `build_id` (String) Id of the active build. Null when type is universal_image.
+- `id` (String) Environment UUID. Same as environment_id.
+- `status` (String) Status of the active build: IN_PROGRESS, SUCCEEDED, FAILED, CANCELLED, or SKIPPED. Null when type is universal_image.
+- `type` (String) build or universal_image.
