@@ -3,12 +3,12 @@
 page_title: "cursor_team_directory_group_members Resource - cursor"
 subcategory: ""
 description: |-
-  Owns the member set of one manual Team directory group. Add and remove use bulk-add and bulk-remove, up to 100 user ids per call. Delete of the group requires the group to be empty, so destroy this resource first. Member changes return 400 on a SCIM-synced group.
+  Owns the complete member set of one manual Team directory group. Declare it at most once per group. Create fails when the group already has members that are not in user_ids; import the resource to take over an existing member set. Add and remove use bulk-add and bulk-remove, up to 100 user ids per call. The API accepts and ignores user ids outside the team, so an apply fails when an id it sent is not a member afterwards. Refresh reads every page of the member list, so members added elsewhere are planned for removal, and drops the resource from state when the group no longer exists. Destroy removes every member of the group, including members added outside Terraform. Delete of the group requires the group to be empty, so destroy this resource first. Member changes return 400 on a SCIM-synced group; manage that membership in the identity provider and do not declare this resource for it. Import with the team_group_ id of the group.
 ---
 
 # cursor_team_directory_group_members (Resource)
 
-Owns the member set of one manual Team directory group. Add and remove use bulk-add and bulk-remove, up to 100 user ids per call. Delete of the group requires the group to be empty, so destroy this resource first. Member changes return 400 on a SCIM-synced group.
+Owns the complete member set of one manual Team directory group. Declare it at most once per group. Create fails when the group already has members that are not in user_ids; import the resource to take over an existing member set. Add and remove use bulk-add and bulk-remove, up to 100 user ids per call. The API accepts and ignores user ids outside the team, so an apply fails when an id it sent is not a member afterwards. Refresh reads every page of the member list, so members added elsewhere are planned for removal, and drops the resource from state when the group no longer exists. Destroy removes every member of the group, including members added outside Terraform. Delete of the group requires the group to be empty, so destroy this resource first. Member changes return 400 on a SCIM-synced group; manage that membership in the identity provider and do not declare this resource for it. Import with the team_group_ id of the group.
 
 ## Example Usage
 
@@ -24,8 +24,8 @@ resource "cursor_team_directory_group_members" "eng" {
 
 ### Required
 
-- `group_id` (String) Group id.
-- `user_ids` (Set of String) Public user ids.
+- `group_id` (String) Group id, not the grp_ public id. Changing it replaces the resource.
+- `user_ids` (Set of String) Public user ids, such as user_abc123. This is the complete member set; an empty set keeps the group empty.
 
 ### Read-Only
 
@@ -38,5 +38,6 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
+# Import by the team_group_ id of the group. The grp_ public id is not accepted.
 terraform import cursor_team_directory_group_members.eng team_group_01k2ja2000e0080000000000g1
 ```

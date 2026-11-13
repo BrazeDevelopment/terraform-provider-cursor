@@ -4,14 +4,19 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/cursor/terraform-provider-cursor/internal/publicapi"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
 const (
@@ -28,6 +33,9 @@ const (
 
 type cursorProvider struct {
 	version string
+	// pendingGuardrails holds the guardrails of a configuration whose credentials are
+	// not known yet. No client exists then, and the checks need none.
+	pendingGuardrails atomic.Pointer[guardrailsConfig]
 }
 
 type cursorProviderModel struct {
@@ -54,7 +62,7 @@ func (p *cursorProvider) Metadata(_ context.Context, _ provider.MetadataRequest,
 
 func (p *cursorProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manage Cursor Automations, Cloud Agent environments, secrets, private worker pools, team model access and spend controls, and Origin resources. Automations use the Cursor Automations API over Connect RPC. Cloud Agents resources use https://api.cursor.com with an API key. Requests rejected with HTTP 429 are retried after the delay in the API's Retry-After or X-RateLimit-Reset header, or with exponential backoff; GET, PUT, and DELETE requests are also retried on HTTP 502, 503, and 504. POST is retried on HTTP 503 only when the response includes Retry-After.",
+		Description: "Manage Cursor Automations, Cloud Agent environments, secrets, private worker pools, team model access and spend controls, and Origin resources. Automations use the Cursor Automations API over Connect RPC. Cloud Agents resources use https://api.cursor.com with an API key. Requests rejected with HTTP 429 are retried after the delay in the API's Retry-After or X-RateLimit-Reset header, or with exponential backoff; GET, PUT, and DELETE requests are also retried on HTTP 502, 503, and 504. POST is retried on HTTP 503 only when the response includes Retry-After. A provider argument takes precedence over its environment variable. An argument set to an empty string counts as unset, and its environment variable is not read in its place. When a credential or endpoint argument has a value that is known only after apply, the provider stays unconfigured for that plan: no environment variable stands in for the value, no API is called, and a resource or data source that has to call the API during that plan fails with a not-configured error. Guardrails arguments must be known at plan time.",
 		Attributes: map[string]schema.Attribute{
 			"token": schema.StringAttribute{
 				Optional:    true,
@@ -92,7 +100,7 @@ func (p *cursorProvider) Schema(_ context.Context, _ provider.SchemaRequest, res
 		},
 		Blocks: map[string]schema.Block{
 			"guardrails": schema.SingleNestedBlock{
-				Description: "Plan-time checks for automations and related resources. Violations fail the plan. Unknown values wait until they are known. This does not constrain launches made from the dashboard or API outside this provider.",
+				Description: "Plan-time checks for automations and related resources. Violations fail the plan. Unknown values wait until they are known. A guardrails argument whose own value is known only after apply fails the plan. This does not constrain launches made from the dashboard or API outside this provider.",
 				Attributes: map[string]schema.Attribute{
 					"allowed_automation_scopes": schema.ListAttribute{
 						ElementType: types.StringType,
@@ -124,6 +132,52 @@ func (p *cursorProvider) Schema(_ context.Context, _ provider.SchemaRequest, res
 }
 
 func (p *cursorProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	if unknown := unknownProviderArguments(req.Config.Raw); len(unknown) > 0 {
+		// An unconfigured provider skips every guardrail check, so a plan would look
+		// clean without having been checked. Credentials can wait; guardrails cannot.
+		if slices.Contains(unknown, "guardrails") {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("guardrails"),
+				"Guardrails are not known yet",
+				"A guardrails argument has a value that is known only after apply, so this plan cannot be checked against it. Set guardrails from values that are known at plan time.",
+			)
+			return
+		}
+		// The guardrails are known and the checks call no API, so they run on this plan
+		// instead of surfacing halfway through the apply that makes the credentials known.
+		var guardrails *guardrailsConfig
+		if req.Config.Raw.IsKnown() {
+			var block *guardrailsModel
+			resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("guardrails"), &block)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			var diags diag.Diagnostics
+			guardrails, diags = guardrailsFromConfig(ctx, block)
+			resp.Diagnostics.Append(diags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			p.pendingGuardrails.Store(guardrails)
+		}
+		// Falling back to an environment variable here would plan with one credential
+		// and apply with another. Leaving the provider unconfigured makes every
+		// resource that needs the API during this plan say so instead.
+		if req.ClientCapabilities.DeferralAllowed {
+			resp.Deferred = &provider.Deferred{Reason: provider.DeferredReasonProviderConfigUnknown}
+			return
+		}
+		guardrailNote := ""
+		if guardrails != nil {
+			guardrailNote = " Guardrails are still checked on this plan."
+		}
+		resp.Diagnostics.AddWarning(
+			"Cursor provider configuration is not known yet",
+			fmt.Sprintf("These provider arguments have values that are known only after apply: %s. The provider is not configured for this plan. Environment variables are not used in place of the unknown values. A resource or data source that has to call the Cursor API before the values are known fails with a not-configured error; apply the resources that produce these values first.%s", strings.Join(unknown, ", "), guardrailNote),
+		)
+		return
+	}
+
 	var config cursorProviderModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
@@ -195,6 +249,15 @@ func (p *cursorProvider) Configure(ctx context.Context, req provider.ConfigureRe
 }
 
 func (p *cursorProvider) Resources(_ context.Context) []func() resource.Resource {
+	constructors := resourceConstructors()
+	out := make([]func() resource.Resource, len(constructors))
+	for i, construct := range constructors {
+		out[i] = func() resource.Resource { return p.withPlanGuardrails(construct()) }
+	}
+	return out
+}
+
+func resourceConstructors() []func() resource.Resource {
 	return []func() resource.Resource{
 		NewPlatformWorkflowResource,
 		NewOriginRepoRulesetResource,
@@ -238,6 +301,26 @@ func (p *cursorProvider) DataSources(_ context.Context) []func() datasource.Data
 		NewPrivateWorkerPoolsDataSource,
 		NewPrivateWorkersSummaryDataSource,
 	}
+}
+
+// unknownProviderArguments names the top-level provider arguments and blocks that
+// hold a value Terraform does not know yet, at any depth.
+func unknownProviderArguments(raw tftypes.Value) []string {
+	if raw.IsFullyKnown() {
+		return nil
+	}
+	var arguments map[string]tftypes.Value
+	if !raw.IsKnown() || raw.As(&arguments) != nil {
+		return []string{"provider configuration"}
+	}
+	var names []string
+	for name, value := range arguments {
+		if !value.IsFullyKnown() {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 // resolveForkKeys captures a raw key_ or crsr_ token before session exchange

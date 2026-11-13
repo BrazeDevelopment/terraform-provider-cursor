@@ -3,12 +3,12 @@
 page_title: "cursor_user_spend_limit Resource - cursor"
 subcategory: ""
 description: |-
-  Sets one team member's monthly spend limit. spend_limit_dollars is an integer. 0 sets a zero-dollar limit. Null, including destroy, sends null and removes the limit. There is no dedicated read; refresh uses monthlyLimitDollars from the paginated spend list and ignores hardLimitOverrideDollars. Enterprise only. The bulk route is not used.
+  Sets one team member's monthly spend limit. spend_limit_dollars is an integer. 0 sets a zero-dollar limit. Null, including destroy, sends null and removes the limit. Create fails when the member already has a different limit; import the resource to manage an existing limit. There is no dedicated read; refresh uses monthlyLimitDollars from the paginated spend list and ignores hardLimitOverrideDollars. Refresh drops the resource from state when the member is no longer in the team's spend data. Emails are matched without regard to letter case. Import with the member email. Enterprise only. The bulk route is not used.
 ---
 
 # cursor_user_spend_limit (Resource)
 
-Sets one team member's monthly spend limit. spend_limit_dollars is an integer. 0 sets a zero-dollar limit. Null, including destroy, sends null and removes the limit. There is no dedicated read; refresh uses monthlyLimitDollars from the paginated spend list and ignores hardLimitOverrideDollars. Enterprise only. The bulk route is not used.
+Sets one team member's monthly spend limit. spend_limit_dollars is an integer. 0 sets a zero-dollar limit. Null, including destroy, sends null and removes the limit. Create fails when the member already has a different limit; import the resource to manage an existing limit. There is no dedicated read; refresh uses monthlyLimitDollars from the paginated spend list and ignores hardLimitOverrideDollars. Refresh drops the resource from state when the member is no longer in the team's spend data. Emails are matched without regard to letter case. Import with the member email. Enterprise only. The bulk route is not used.
 
 ## Example Usage
 
@@ -24,15 +24,15 @@ resource "cursor_user_spend_limit" "owner" {
 
 ### Required
 
-- `user_email` (String) Email of the team member.
+- `user_email` (String) Email of the team member. Changing it to a different member replaces the resource; letter case is not significant.
 
 ### Optional
 
-- `spend_limit_dollars` (Number) Integer spend limit in dollars. 0 is a zero-dollar limit. Null removes the limit.
+- `spend_limit_dollars` (Number) Integer spend limit in dollars, 0 or more. 0 is a zero-dollar limit. Null removes the limit.
 
 ### Read-Only
 
-- `id` (String) The member email.
+- `id` (String) The member email in lower case.
 
 ## Import
 
@@ -41,5 +41,6 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
+# Import by the member email. Letter case is not significant.
 terraform import cursor_user_spend_limit.owner owner@example.com
 ```

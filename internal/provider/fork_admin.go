@@ -54,6 +54,9 @@ func (c *apiClient) requireOrganization() error {
 	return nil
 }
 
+// A larger body is reported as too large instead of being cut off into a JSON error.
+const adminMaxResponseBytes = 10 << 20
+
 func (c *apiClient) adminDo(ctx context.Context, apiName, key, method, path string, payload any, dest any, success ...int) error {
 	if c == nil || c.httpClient == nil {
 		return fmt.Errorf("%s client is not configured", apiName)
@@ -90,9 +93,12 @@ func (c *apiClient) adminDo(ctx context.Context, apiName, key, method, path stri
 		return fmt.Errorf("calling %s: %w", apiName, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, adminMaxResponseBytes+1))
 	if err != nil {
 		return fmt.Errorf("reading %s response: %w", apiName, err)
+	}
+	if len(raw) > adminMaxResponseBytes && adminStatusOK(resp.StatusCode, success) {
+		return fmt.Errorf("%s response is larger than %d MiB", apiName, adminMaxResponseBytes>>20)
 	}
 	if !adminStatusOK(resp.StatusCode, success) {
 		code, message := adminErrorParts(raw)
@@ -424,30 +430,58 @@ func (c *apiClient) deleteCursorGroup(ctx context.Context, apiName, key, collect
 	return c.adminDo(ctx, apiName, key, http.MethodDelete, collection+"/"+url.PathEscape(id), nil, nil, http.StatusOK, http.StatusNoContent)
 }
 
+// listGroupMembers returns each member once. A short list would plan removals of real members,
+// so the walk only stops on an explicit end: hasNextPage, then totalPages, and when the response
+// carries neither, a page that adds no member. Running past maxAdminPages is an error.
 func (c *apiClient) listGroupMembers(ctx context.Context, apiName, key, collection, id string) ([]groupMemberRecord, error) {
 	var members []groupMemberRecord
+	seen := map[string]struct{}{}
 	path := collection + "/" + url.PathEscape(id) + "/members"
 	for page := 1; page <= maxAdminPages; page++ {
 		query := url.Values{"page": {strconv.Itoa(page)}, "pageSize": {strconv.Itoa(adminPageSize)}}
 		var out struct {
 			Members    []groupMemberRecord `json:"members"`
-			Pagination *adminPagination    `json:"pagination"`
+			Pagination *struct {
+				HasNextPage *bool `json:"hasNextPage"`
+				TotalPages  *int  `json:"totalPages"`
+			} `json:"pagination"`
 		}
 		if err := c.adminDo(ctx, apiName, key, http.MethodGet, path+"?"+query.Encode(), nil, &out, http.StatusOK); err != nil {
 			return nil, err
 		}
-		members = append(members, out.Members...)
-		if out.Pagination == nil || out.Pagination.HasNextPage == nil || !*out.Pagination.HasNextPage {
+		fresh := 0
+		for _, member := range out.Members {
+			if _, ok := seen[member.UserID]; ok || member.UserID == "" {
+				continue
+			}
+			seen[member.UserID] = struct{}{}
+			members = append(members, member)
+			fresh++
+		}
+		more := fresh > 0
+		if p := out.Pagination; p != nil && p.HasNextPage != nil {
+			more = *p.HasNextPage
+		} else if p != nil && p.TotalPages != nil {
+			more = page < *p.TotalPages
+		}
+		if !more {
 			return members, nil
 		}
 	}
 	return nil, fmt.Errorf("%s members list exceeded %d pages", apiName, maxAdminPages)
 }
 
-func (c *apiClient) bulkGroupMembers(ctx context.Context, apiName, key, collection, id, action string, userIDs []string) error {
-	if len(userIDs) == 0 {
-		return nil
-	}
+type bulkMembersResult struct {
+	// sent holds the ids of every chunk the API accepted, in order.
+	sent []string
+	// changed sums addedCount or removedCount. It is only meaningful when counted is true.
+	changed int64
+	counted bool
+}
+
+// bulkGroupMembers posts userIDs in chunks of 100 and stops at the first failed chunk.
+func (c *apiClient) bulkGroupMembers(ctx context.Context, apiName, key, collection, id, action string, userIDs []string) (bulkMembersResult, error) {
+	result := bulkMembersResult{counted: true}
 	path := collection + "/" + url.PathEscape(id) + "/members/" + action
 	for start := 0; start < len(userIDs); start += 100 {
 		end := start + 100
@@ -455,11 +489,25 @@ func (c *apiClient) bulkGroupMembers(ctx context.Context, apiName, key, collecti
 			end = len(userIDs)
 		}
 		payload := map[string]any{"userIds": userIDs[start:end]}
-		if err := c.adminDo(ctx, apiName, key, http.MethodPost, path, payload, nil, http.StatusOK); err != nil {
-			return err
+		var out struct {
+			AddedCount   *int64 `json:"addedCount"`
+			RemovedCount *int64 `json:"removedCount"`
+		}
+		if err := c.adminDo(ctx, apiName, key, http.MethodPost, path, payload, &out, http.StatusOK, http.StatusNoContent); err != nil {
+			return result, err
+		}
+		result.sent = append(result.sent, userIDs[start:end]...)
+		count := out.AddedCount
+		if action == "bulk-remove" {
+			count = out.RemovedCount
+		}
+		if count == nil {
+			result.counted = false
+		} else {
+			result.changed += *count
 		}
 	}
-	return nil
+	return result, nil
 }
 
 type repoBlocklistRecord struct {
@@ -492,10 +540,8 @@ func (c *apiClient) upsertRepoBlocklist(ctx context.Context, repoURL string, pat
 	if err := c.adminDo(ctx, "Team Admin API", c.teamAPIKey, http.MethodPost, "/settings/repo-blocklists/repos/upsert", payload, &out, http.StatusOK); err != nil {
 		return nil, err
 	}
-	for _, repo := range out.Repos {
-		if repo.URL == repoURL {
-			return &repo, nil
-		}
+	if repo := findRepoBlocklistByURL(out.Repos, repoURL); repo != nil {
+		return repo, nil
 	}
 	if len(out.Repos) == 1 {
 		return &out.Repos[0], nil

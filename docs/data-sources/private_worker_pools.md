@@ -3,18 +3,26 @@
 page_title: "cursor_private_worker_pools Data Source - cursor"
 subcategory: ""
 description: |-
-  Lists private worker pools. scope is team_pool, personal, or all. The resource scope team maps to team_pool and user maps to personal.
+  Lists private worker pools with the provider pool_api_key. The list filter is team_pool, personal, or all. cursor_private_worker_pool names the same scopes team and user; the data source accepts those too and sends team_pool and personal.
 ---
 
 # cursor_private_worker_pools (Data Source)
 
-Lists private worker pools. scope is team_pool, personal, or all. The resource scope team maps to team_pool and user maps to personal.
+Lists private worker pools with the provider pool_api_key. The list filter is team_pool, personal, or all. cursor_private_worker_pool names the same scopes team and user; the data source accepts those too and sends team_pool and personal.
 
 ## Example Usage
 
 ```terraform
+# scope takes the same values as cursor_private_worker_pool ("team", "user"). Omit it to list every pool the key can see.
 data "cursor_private_worker_pools" "team" {
-  scope = "team_pool"
+  scope = "team"
+}
+
+output "idle_team_pools" {
+  value = [
+    for pool in data.cursor_private_worker_pools.team.pools :
+    pool.id if pool.connected_worker_count == 0
+  ]
 }
 ```
 
@@ -23,25 +31,25 @@ data "cursor_private_worker_pools" "team" {
 
 ### Optional
 
-- `scope` (String) team_pool, personal, or all. Defaults to all.
+- `scope` (String) team_pool, personal, or all. Defaults to all. team is accepted for team_pool and user for personal.
 
 ### Read-Only
 
-- `id` (String) The ID of this resource.
-- `pools` (Attributes List) (see [below for nested schema](#nestedatt--pools))
+- `id` (String) The list filter that was sent: team_pool, personal, or all.
+- `pools` (Attributes List) Pools, sorted by id. Empty when no pool matches. (see [below for nested schema](#nestedatt--pools))
 
 <a id="nestedatt--pools"></a>
 ### Nested Schema for `pools`
 
 Read-Only:
 
-- `connected_worker_count` (Number)
-- `id` (String)
-- `in_use_worker_count` (Number)
-- `is_stale` (Boolean)
-- `pool_name` (String)
-- `repo_name` (String)
-- `repo_owner` (String)
-- `repo_url` (String)
-- `scope` (String)
-- `worker_ready_timeout_seconds` (Number)
+- `connected_worker_count` (Number) Workers currently connected to this pool.
+- `id` (String) The id cursor_private_worker_pool uses for this pool and accepts on import: <scope>/<pool_name>, or <scope>/<pool_name>/<repo_owner>/<repo_name> for a repo-backed pool.
+- `in_use_worker_count` (Number) Connected workers that currently have an assigned agent.
+- `is_stale` (Boolean) True when the API reports the pool as stale.
+- `pool_name` (String) Pool name. Automations select it with private_worker.labels.pool.
+- `repo_name` (String) Repository name of a repo-backed pool. Null for an any-repo pool.
+- `repo_owner` (String) Repository owner of a repo-backed pool. Null for an any-repo pool.
+- `repo_url` (String) Repository URL the pool was registered with. Null when the API returns none.
+- `scope` (String) team or user, the values cursor_private_worker_pool uses. Null when the API does not report a scope and the list was not filtered by one.
+- `worker_ready_timeout_seconds` (Number) Seconds an agent waits for a worker in this pool to become ready.

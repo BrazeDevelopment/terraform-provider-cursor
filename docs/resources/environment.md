@@ -3,12 +3,12 @@
 page_title: "cursor_environment Resource - cursor"
 subcategory: ""
 description: |-
-  Manages a Cursor Cloud Agent environment. owner and repos force replacement because the API accepts only name and environmentJson on update, and an owner cannot have two environments with the same name. Replacing an environment changes its id, so automations that reference it must move in the same apply. A response that includes repoFile is configured from a file in a repository; that file is managed in git and the provider will not update the environment.
+  Manages a Cursor Cloud Agent environment. owner and repos force replacement because the API accepts only name and environmentJson on update, and an owner cannot have two environments with the same name. Replacing an environment changes its id, so automations that reference it must move in the same apply. A response that includes repoFile is configured from a file in a repository; that file is managed in git and the provider will not update the environment. Import with the environment UUID.
 ---
 
 # cursor_environment (Resource)
 
-Manages a Cursor Cloud Agent environment. owner and repos force replacement because the API accepts only name and environmentJson on update, and an owner cannot have two environments with the same name. Replacing an environment changes its id, so automations that reference it must move in the same apply. A response that includes repoFile is configured from a file in a repository; that file is managed in git and the provider will not update the environment.
+Manages a Cursor Cloud Agent environment. owner and repos force replacement because the API accepts only name and environmentJson on update, and an owner cannot have two environments with the same name. Replacing an environment changes its id, so automations that reference it must move in the same apply. A response that includes repoFile is configured from a file in a repository; that file is managed in git and the provider will not update the environment. Import with the environment UUID.
 
 ## Example Usage
 
@@ -31,10 +31,10 @@ resource "cursor_environment" "web" {
 
 ### Required
 
-- `environment_json` (String) environment.json as a JSON string, using the .cursor/environment.json schema. Refresh keeps the configured text while the saved configuration is the same JSON, so key order and whitespace do not cause drift.
-- `name` (String) Display name. It must be unique for the owner.
+- `environment_json` (String) environment.json as a JSON string holding one JSON object, using the .cursor/environment.json schema. Refresh keeps the configured text while the saved configuration is the same JSON, so key order and whitespace do not cause drift.
+- `name` (String) Display name, 1 to 255 characters. It must be unique for the owner.
 - `owner` (String) team or personal. Changing owner replaces the environment.
-- `repos` (Attributes List) Repositories in the environment. An empty list creates an environment without repositories. Changing the list replaces the environment. (see [below for nested schema](#nestedatt--repos))
+- `repos` (Attributes List) Repositories in the environment, at most 100, each listed once. An empty list creates an environment without repositories. Adding, removing, or reordering repositories replaces the environment. Respelling a URL that names the same repository, such as adding .git or changing letter case, does not. (see [below for nested schema](#nestedatt--repos))
 
 ### Read-Only
 
@@ -54,5 +54,6 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
+# Import by the environment UUID.
 terraform import cursor_environment.web 8f14e45f-ceea-4e6b-9c3a-1d2e3f4a5b6c
 ```
