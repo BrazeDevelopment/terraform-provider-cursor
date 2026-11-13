@@ -6,9 +6,11 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/cursor/terraform-provider-cursor/internal/publicapi"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
@@ -31,6 +33,9 @@ const (
 
 type cursorProvider struct {
 	version string
+	// pendingGuardrails holds the guardrails of a configuration whose credentials are
+	// not known yet. No client exists then, and the checks need none.
+	pendingGuardrails atomic.Pointer[guardrailsConfig]
 }
 
 type cursorProviderModel struct {
@@ -138,6 +143,23 @@ func (p *cursorProvider) Configure(ctx context.Context, req provider.ConfigureRe
 			)
 			return
 		}
+		// The guardrails are known and the checks call no API, so they run on this plan
+		// instead of surfacing halfway through the apply that makes the credentials known.
+		var guardrails *guardrailsConfig
+		if req.Config.Raw.IsKnown() {
+			var block *guardrailsModel
+			resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("guardrails"), &block)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			var diags diag.Diagnostics
+			guardrails, diags = guardrailsFromConfig(ctx, block)
+			resp.Diagnostics.Append(diags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			p.pendingGuardrails.Store(guardrails)
+		}
 		// Falling back to an environment variable here would plan with one credential
 		// and apply with another. Leaving the provider unconfigured makes every
 		// resource that needs the API during this plan say so instead.
@@ -145,9 +167,13 @@ func (p *cursorProvider) Configure(ctx context.Context, req provider.ConfigureRe
 			resp.Deferred = &provider.Deferred{Reason: provider.DeferredReasonProviderConfigUnknown}
 			return
 		}
+		guardrailNote := ""
+		if guardrails != nil {
+			guardrailNote = " Guardrails are still checked on this plan."
+		}
 		resp.Diagnostics.AddWarning(
 			"Cursor provider configuration is not known yet",
-			fmt.Sprintf("These provider arguments have values that are known only after apply: %s. The provider is not configured for this plan. Environment variables are not used in place of the unknown values. A resource or data source that has to call the Cursor API before the values are known fails with a not-configured error; apply the resources that produce these values first.", strings.Join(unknown, ", ")),
+			fmt.Sprintf("These provider arguments have values that are known only after apply: %s. The provider is not configured for this plan. Environment variables are not used in place of the unknown values. A resource or data source that has to call the Cursor API before the values are known fails with a not-configured error; apply the resources that produce these values first.%s", strings.Join(unknown, ", "), guardrailNote),
 		)
 		return
 	}
@@ -223,6 +249,15 @@ func (p *cursorProvider) Configure(ctx context.Context, req provider.ConfigureRe
 }
 
 func (p *cursorProvider) Resources(_ context.Context) []func() resource.Resource {
+	constructors := resourceConstructors()
+	out := make([]func() resource.Resource, len(constructors))
+	for i, construct := range constructors {
+		out[i] = func() resource.Resource { return p.withPlanGuardrails(construct()) }
+	}
+	return out
+}
+
+func resourceConstructors() []func() resource.Resource {
 	return []func() resource.Resource{
 		NewPlatformWorkflowResource,
 		NewOriginRepoRulesetResource,

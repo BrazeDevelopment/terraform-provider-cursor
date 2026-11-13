@@ -104,13 +104,60 @@ func (g *guardrailsConfig) checkOwners(kind string, values []string) diag.Diagno
 	return diags
 }
 
-var _ resource.ResourceWithModifyPlan = (*platformWorkflowResource)(nil)
+// planGuardrails returns the guardrails a plan is checked against. While a credential
+// is unknown there is no client, and the guardrails come from the provider.
+func planGuardrails(client *apiClient, p *cursorProvider) *guardrailsConfig {
+	if client != nil {
+		return client.guardrails
+	}
+	if p != nil {
+		return p.pendingGuardrails.Load()
+	}
+	return nil
+}
+
+// withPlanGuardrails gives the resources that check guardrails a way to reach them
+// before the provider has a client.
+func (p *cursorProvider) withPlanGuardrails(res resource.Resource) resource.Resource {
+	switch r := res.(type) {
+	case *platformWorkflowResource:
+		return &guardedWorkflowResource{platformWorkflowResource: r, provider: p}
+	case *environmentResource:
+		r.provider = p
+	case *privateWorkerPoolResource:
+		r.provider = p
+	}
+	return res
+}
+
+var (
+	_ resource.ResourceWithModifyPlan     = (*platformWorkflowResource)(nil)
+	_ resource.ResourceWithModifyPlan     = (*guardedWorkflowResource)(nil)
+	_ resource.ResourceWithConfigure      = (*guardedWorkflowResource)(nil)
+	_ resource.ResourceWithImportState    = (*guardedWorkflowResource)(nil)
+	_ resource.ResourceWithValidateConfig = (*guardedWorkflowResource)(nil)
+)
 
 func (r *platformWorkflowResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() || r.client == nil || r.client.guardrails == nil {
+	modifyWorkflowPlan(ctx, planGuardrails(r.client, nil), req, resp)
+}
+
+// guardedWorkflowResource is the registered automation resource. The embedded
+// resource has no field for the provider, so the wrapper carries it.
+type guardedWorkflowResource struct {
+	*platformWorkflowResource
+	provider *cursorProvider
+}
+
+func (r *guardedWorkflowResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	modifyWorkflowPlan(ctx, planGuardrails(r.client, r.provider), req, resp)
+}
+
+func modifyWorkflowPlan(ctx context.Context, g *guardrailsConfig, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || g == nil {
 		return
 	}
-	resp.Diagnostics.Append(checkWorkflowGuardrails(ctx, r.client.guardrails, req)...)
+	resp.Diagnostics.Append(checkWorkflowGuardrails(ctx, g, req)...)
 }
 
 // workflowGuardrailValues holds the inspected attributes as framework values rather

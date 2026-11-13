@@ -442,8 +442,10 @@ func TestEveryTypeIsRegisteredDocumentedAndHasAnExample(t *testing.T) {
 		}
 	}
 	resourceNames := map[string]bool{}
-	for _, register := range p.Resources(ctx) {
+	for _, register := range resourceConstructors() {
 		registered[ldsTypeName(register)] = true
+	}
+	for _, register := range p.Resources(ctx) {
 		resp := &resource.MetadataResponse{}
 		register().Metadata(ctx, resource.MetadataRequest{ProviderTypeName: "cursor"}, resp)
 		if resourceNames[resp.TypeName] {

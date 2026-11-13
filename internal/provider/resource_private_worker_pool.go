@@ -27,7 +27,8 @@ var (
 )
 
 type privateWorkerPoolResource struct {
-	client *apiClient
+	client   *apiClient
+	provider *cursorProvider
 }
 
 type privateWorkerPoolModel struct {
@@ -148,7 +149,8 @@ func (r *privateWorkerPoolResource) ValidateConfig(ctx context.Context, req reso
 }
 
 func (r *privateWorkerPoolResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() || r.client == nil || r.client.guardrails == nil || !r.client.guardrails.HasAllowedOwners {
+	guardrails := planGuardrails(r.client, r.provider)
+	if req.Plan.Raw.IsNull() || guardrails == nil || !guardrails.HasAllowedOwners {
 		return
 	}
 	var owner types.String
@@ -156,7 +158,7 @@ func (r *privateWorkerPoolResource) ModifyPlan(ctx context.Context, req resource
 	if resp.Diagnostics.HasError() || optionalString(owner) == "" {
 		return
 	}
-	if !r.client.guardrails.ownerAllowed(owner.ValueString()) {
+	if !guardrails.ownerAllowed(owner.ValueString()) {
 		resp.Diagnostics.AddAttributeError(path.Root("repo_owner"), "Repository owner is not allowed", fmt.Sprintf("guardrails.allowed_repo_owners rejected worker pool repo_owner %q.", owner.ValueString()))
 	}
 }

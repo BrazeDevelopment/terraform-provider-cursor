@@ -27,7 +27,8 @@ var (
 )
 
 type environmentResource struct {
-	client *apiClient
+	client   *apiClient
+	provider *cursorProvider
 }
 
 type environmentRepoModel struct {
@@ -353,7 +354,8 @@ func (r *environmentResource) ImportState(ctx context.Context, req resource.Impo
 }
 
 func (r *environmentResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() || r.client == nil || r.client.guardrails == nil || !r.client.guardrails.HasAllowedOwners {
+	guardrails := planGuardrails(r.client, r.provider)
+	if req.Plan.Raw.IsNull() || guardrails == nil || !guardrails.HasAllowedOwners {
 		return
 	}
 	// repos is read as a framework value: the model's slice cannot hold an unknown list.
@@ -362,7 +364,7 @@ func (r *environmentResource) ModifyPlan(ctx context.Context, req resource.Modif
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.Diagnostics.Append(checkEnvironmentOwnerGuardrail(r.client.guardrails, repos)...)
+	resp.Diagnostics.Append(checkEnvironmentOwnerGuardrail(guardrails, repos)...)
 }
 
 // Known urls are checked even when other urls are still unknown. Unknown urls are

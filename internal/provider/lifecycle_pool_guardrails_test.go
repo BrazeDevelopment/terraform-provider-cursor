@@ -817,3 +817,76 @@ func TestGuardrailPoolLabelRequiresNonEmptyKnownString(t *testing.T) {
 		}
 	}
 }
+
+func TestGuardrailsAreCheckedWhileCredentialsAreUnknown(t *testing.T) {
+	ctx := context.Background()
+	p, providerSchema := ldsProviderSchema(t)
+	registered := map[string]resource.ResourceWithModifyPlan{}
+	for _, register := range p.Resources(ctx) {
+		res := register()
+		meta := &resource.MetadataResponse{}
+		res.Metadata(ctx, resource.MetadataRequest{ProviderTypeName: "cursor"}, meta)
+		if planner, ok := res.(resource.ResourceWithModifyPlan); ok {
+			registered[meta.TypeName] = planner
+		}
+	}
+	modify := func(name string, model any) diag.Diagnostics {
+		res, ok := registered[name]
+		if !ok {
+			t.Fatalf("%s is not registered with a plan check", name)
+		}
+		sch := resourceSchema(t, res)
+		raw := mustState(t, ctx, sch, model).Raw
+		plan := tfsdk.Plan{Schema: sch, Raw: raw}
+		resp := &resource.ModifyPlanResponse{Plan: plan}
+		res.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: plan, Config: tfsdk.Config{Schema: sch, Raw: raw}, State: emptyState(ctx, sch)}, resp)
+		return resp.Diagnostics
+	}
+
+	badEnvironment, goodEnvironment := lesEnvironment("https://github.com/evil/tool"), lesEnvironment("https://github.com/acme/api")
+	badPool, goodPool := lpgRepoPool(), lpgRepoPool()
+	badPool.RepoOwner = types.StringValue("evil")
+	badWorkflow, goodWorkflow := lpgWorkflow(ctx), lpgWorkflow(ctx)
+	badWorkflow.Scope = types.StringValue("user")
+	violating := map[string]any{"cursor_environment": &badEnvironment, "cursor_private_worker_pool": &badPool, "cursor_platform_workflow": &badWorkflow}
+	compliant := map[string]any{"cursor_environment": &goodEnvironment, "cursor_private_worker_pool": &goodPool, "cursor_platform_workflow": &goodWorkflow}
+
+	for name, model := range violating {
+		if diags := modify(name, model); len(diags) != 0 {
+			t.Errorf("%s was checked before the provider had guardrails: %s", name, fmtDiag(diags))
+		}
+	}
+
+	guardrailsType := providerSchema.Type().TerraformType(ctx).(tftypes.Object).AttributeTypes["guardrails"]
+	list := func(values ...string) tftypes.Value {
+		elements := make([]tftypes.Value, len(values))
+		for i, value := range values {
+			elements[i] = tftypes.NewValue(tftypes.String, value)
+		}
+		return tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, elements)
+	}
+	resp := ldsConfigure(t, p, providerSchema, false, map[string]tftypes.Value{
+		"api_key": tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
+		"guardrails": ldsObject(t, guardrailsType, map[string]tftypes.Value{
+			"allowed_repo_owners":       list("acme"),
+			"allowed_automation_scopes": list("team"),
+		}),
+	})
+	if resp.Diagnostics.HasError() || resp.ResourceData != nil {
+		t.Fatalf("configure: %s, resource data %v", fmtDiag(resp.Diagnostics), resp.ResourceData)
+	}
+	if warnings := resp.Diagnostics.Warnings(); len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), "Guardrails are still checked") {
+		t.Fatalf("warnings = %v", warnings)
+	}
+
+	for name, model := range violating {
+		if diags := modify(name, model); !diags.HasError() {
+			t.Errorf("%s: a violating plan passed while the credentials were unknown", name)
+		}
+	}
+	for name, model := range compliant {
+		if diags := modify(name, model); len(diags) != 0 {
+			t.Errorf("%s: a compliant plan was rejected: %s", name, fmtDiag(diags))
+		}
+	}
+}
