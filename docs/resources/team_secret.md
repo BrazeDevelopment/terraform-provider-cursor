@@ -3,16 +3,23 @@
 page_title: "cursor_team_secret Resource - cursor"
 subcategory: ""
 description: |-
-  Manages one version of a team Cloud Agents secret. This is the secret production pool workers can receive, and only when Secret sync is on and the worker was started with --sync-dashboard-secrets. Import with /<secret_version_id>. An import id without a version fails when the name has several versions.
+  Manages one version of a team Cloud Agents secret. This is the secret production pool workers can receive, and only when Secret sync is on and the worker was started with --sync-dashboard-secrets. Create fails when the name already has a version, because the API would change that version in place; import it instead. Import with /<secret_version_id>, or with  when the name has one version. An import id without a version fails when the name has several versions. The first apply after import sends value_wo. Requires Terraform or OpenTofu 1.11 or later.
 ---
 
 # cursor_team_secret (Resource)
 
-Manages one version of a team Cloud Agents secret. This is the secret production pool workers can receive, and only when Secret sync is on and the worker was started with --sync-dashboard-secrets. Import with <name>/<secret_version_id>. An import id without a version fails when the name has several versions.
+Manages one version of a team Cloud Agents secret. This is the secret production pool workers can receive, and only when Secret sync is on and the worker was started with --sync-dashboard-secrets. Create fails when the name already has a version, because the API would change that version in place; import it instead. Import with <name>/<secret_version_id>, or with <name> when the name has one version. An import id without a version fails when the name has several versions. The first apply after import sends value_wo. Requires Terraform or OpenTofu 1.11 or later.
 
 ## Example Usage
 
 ```terraform
+# An ephemeral variable keeps the value out of saved plan files as well as state.
+variable "npm_token" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
 resource "cursor_team_secret" "npm" {
   name             = "NPM_TOKEN"
   type             = "runtime_secret"
@@ -30,10 +37,10 @@ resource "cursor_team_secret" "npm" {
 > **NOTE**: [Write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) are supported in Terraform 1.11 and later.
 
 - `name` (String) Secret name. Changing it replaces the resource. Names that differ only by case conflict.
-- `repos` (List of String) Repositories that receive this version. An empty list means every repository. Values are compared as lowercase host/owner/repo, sorted. acme/api, an https URL, and a git@ URL normalize to the same repository.
-- `type` (String) runtime_secret or environment_variable. build_secret cannot be set or changed through the API.
-- `value_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Secret value. Write-only: it is never stored in state or plan output. Every update sends it, including a change of only type or repos. Requires Terraform or OpenTofu 1.11 or later.
-- `value_wo_version` (Number) Change this number to rotate the value when type and repos stay the same. Refresh can see deletion and changes to type or repos, and it cannot see value changes.
+- `repos` (List of String) Repositories that receive this version, at most 100. An empty list means every repository. A blank entry is rejected so that it cannot turn the list into an empty one. Values are compared as lowercase host/owner/repo, sorted. acme/api, an https URL, and a git@ URL normalize to the same repository.
+- `type` (String) runtime_secret or environment_variable. build_secret cannot be set or changed through the API. A version changed to a Build Secret outside Terraform can be destroyed or removed from state, and cannot be updated or imported.
+- `value_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Secret value, 1 to 4,096 bytes. Write-only: it is never stored in state or plan output. Every update sends it, including a change of only type or repos. Requires Terraform or OpenTofu 1.11 or later.
+- `value_wo_version` (Number) Change this number to rotate the value when type and repos stay the same. Refresh can see deletion and changes to type or repos, and it cannot see value changes. An imported secret has no number in state, so the first apply after import sends value_wo.
 
 ### Read-Only
 
@@ -47,5 +54,11 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
+# One version: <name>/<secret_version_id>.
 terraform import cursor_team_secret.npm NPM_TOKEN/secv_3qKx9mT2bV7nR1cW5yZ8aQ
+
+# A name with a single version: <name>.
+terraform import cursor_team_secret.npm NPM_TOKEN
+
+# State has no value_wo_version after import, so the first apply sends value_wo.
 ```

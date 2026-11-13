@@ -288,6 +288,7 @@ func TestSecretLifecycleCanonicalReposAndLeak(t *testing.T) {
 	var putBody string
 	var status = http.StatusCreated
 	omitID := false
+	exists := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		switch {
@@ -304,6 +305,7 @@ func TestSecretLifecycleCanonicalReposAndLeak(t *testing.T) {
 				_, _ = io.WriteString(w, `{"error":{"code":"secret_scope_conflict","message":"overlap"}}`)
 				return
 			}
+			exists = true
 			w.WriteHeader(status)
 			out := map[string]any{}
 			for k, v := range version {
@@ -319,8 +321,13 @@ func TestSecretLifecycleCanonicalReposAndLeak(t *testing.T) {
 			for k, v := range version {
 				item[k] = v
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{item}, "nextCursor": nil})
+			items := []any{}
+			if exists {
+				items = append(items, item)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "nextCursor": nil})
 		case r.Method == http.MethodDelete:
+			exists = false
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{"name":"NPM_TOKEN"}`)
 		}
@@ -401,6 +408,10 @@ func TestSecretErrorsAndBuildSecret(t *testing.T) {
 			_, _ = io.WriteString(w, `{"error":{"code":"secret_name_ambiguous","message":"pick one","versions":[{"id":"secv_aaaaaaaaaaaaaaaaaaaaaa","repos":[]},{"id":"secv_bbbbbbbbbbbbbbbbbbbbbb","repos":[]}]}}`)
 			return
 		}
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `{"items":[],"nextCursor":null}`)
+			return
+		}
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, `{"error":{"code":"team_admin_required","message":"admins only"}}`)
 	}))
@@ -467,7 +478,7 @@ func TestSecretErrorsAndBuildSecret(t *testing.T) {
 	}
 	read := &resource.ReadResponse{State: state}
 	res.Read(ctx, resource.ReadRequest{State: state}, read)
-	if !strings.Contains(fmtDiag(read.Diagnostics), "Build Secret") {
+	if read.Diagnostics.HasError() || read.Diagnostics.WarningsCount() != 1 || !strings.Contains(read.Diagnostics.Warnings()[0].Detail(), "Build Secret") {
 		t.Fatalf("build secret = %v", read.Diagnostics)
 	}
 }

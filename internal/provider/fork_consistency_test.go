@@ -88,13 +88,18 @@ func planModifierDescriptions(ctx context.Context, attribute schema.Attribute) [
 func TestSecretStateKeepsConfiguredRepoSpelling(t *testing.T) {
 	ctx := context.Background()
 	apiRepos := []string{"github.com/acme/api"}
+	items := []any{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		item := map[string]any{"id": "secv_3qKx9mT2bV7nR1cW5yZ8aQ", "name": "NPM_TOKEN", "type": "runtime_secret", "repos": apiRepos}
 		if r.Method == http.MethodPut {
+			items = []any{item}
 			_ = json.NewEncoder(w).Encode(item)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{item}})
+		if len(items) > 0 {
+			items = []any{item}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
 	}))
 	defer server.Close()
 	res := &secretResource{client: publicClient(server.URL, "key_test"), scope: secretScopeTeam}
@@ -367,6 +372,10 @@ func TestModelParametersKeepNullAllowedValues(t *testing.T) {
 func TestGroupMembersAreASet(t *testing.T) {
 	ctx := context.Background()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/bulk-add") {
+			_, _ = io.WriteString(w, `{"addedCount":2}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{}`)
 	}))
 	defer server.Close()

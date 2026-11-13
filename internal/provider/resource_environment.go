@@ -3,9 +3,13 @@ package provider
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/cursor/terraform-provider-cursor/internal/publicapi"
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -46,9 +50,11 @@ func (r *environmentResource) Metadata(_ context.Context, req resource.MetadataR
 	resp.TypeName = req.ProviderTypeName + "_environment"
 }
 
+const environmentReposReplaceDescription = "If the repositories change, Terraform will destroy and recreate the resource. A different spelling of the same repositories in the same order does not."
+
 func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Cursor Cloud Agent environment. owner and repos force replacement because the API accepts only name and environmentJson on update, and an owner cannot have two environments with the same name. Replacing an environment changes its id, so automations that reference it must move in the same apply. A response that includes repoFile is configured from a file in a repository; that file is managed in git and the provider will not update the environment.",
+		Description: "Manages a Cursor Cloud Agent environment. owner and repos force replacement because the API accepts only name and environmentJson on update, and an owner cannot have two environments with the same name. Replacing an environment changes its id, so automations that reference it must move in the same apply. A response that includes repoFile is configured from a file in a repository; that file is managed in git and the provider will not update the environment. Import with the environment UUID.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -67,18 +73,23 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"name": schema.StringAttribute{
 				Required:    true,
-				Description: "Display name. It must be unique for the owner.",
+				Description: "Display name, 1 to 255 characters. It must be unique for the owner.",
+				Validators:  []validator.String{stringvalidator.UTF8LengthBetween(1, 255)},
 			},
 			"environment_json": schema.StringAttribute{
 				Required:    true,
-				Description: "environment.json as a JSON string, using the .cursor/environment.json schema. Refresh keeps the configured text while the saved configuration is the same JSON, so key order and whitespace do not cause drift.",
+				Description: "environment.json as a JSON string holding one JSON object, using the .cursor/environment.json schema. Refresh keeps the configured text while the saved configuration is the same JSON, so key order and whitespace do not cause drift.",
 				Validators:  []validator.String{environmentJSONValidator{}},
 			},
 			"repos": schema.ListNestedAttribute{
 				Required:    true,
-				Description: "Repositories in the environment. An empty list creates an environment without repositories. Changing the list replaces the environment.",
+				Description: "Repositories in the environment, at most 100, each listed once. An empty list creates an environment without repositories. Adding, removing, or reordering repositories replaces the environment. Respelling a URL that names the same repository, such as adding .git or changing letter case, does not.",
 				PlanModifiers: []planmodifier.List{
-					listplanmodifier.RequiresReplace(),
+					listplanmodifier.RequiresReplaceIf(environmentReposRequireReplace, environmentReposReplaceDescription, environmentReposReplaceDescription),
+				},
+				Validators: []validator.List{
+					listvalidator.SizeAtMost(100),
+					environmentReposValidator{},
 				},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
@@ -96,7 +107,7 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 type environmentJSONValidator struct{}
 
 func (v environmentJSONValidator) Description(context.Context) string {
-	return "Must be a single valid JSON value."
+	return "Must be a single valid JSON object."
 }
 
 func (v environmentJSONValidator) MarkdownDescription(ctx context.Context) string {
@@ -107,8 +118,79 @@ func (v environmentJSONValidator) ValidateString(_ context.Context, req validato
 	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
 		return
 	}
-	if _, err := normalizeEnvironmentJSON(req.ConfigValue.ValueString()); err != nil {
+	normalized, err := normalizeEnvironmentJSON(req.ConfigValue.ValueString())
+	if err != nil {
 		resp.Diagnostics.AddAttributeError(req.Path, "Invalid environment_json", err.Error())
+		return
+	}
+	if !strings.HasPrefix(normalized, "{") {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid environment_json", "environment_json must be a JSON object, as in a .cursor/environment.json file.")
+	}
+}
+
+// environmentReposValidator rejects a blank url and a repository listed twice.
+// Unknown values are skipped; Terraform validates again once they are known.
+type environmentReposValidator struct{}
+
+func (v environmentReposValidator) Description(context.Context) string {
+	return "Each url must be set, and a repository can appear only once."
+}
+
+func (v environmentReposValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v environmentReposValidator) ValidateList(_ context.Context, req validator.ListRequest, resp *validator.ListResponse) {
+	seen := map[string]int{}
+	for i, element := range knownElements(req.ConfigValue) {
+		url, ok := knownAttributes(element)["url"].(types.String)
+		if !ok || url.IsNull() || url.IsUnknown() {
+			continue
+		}
+		p := req.Path.AtListIndex(i).AtName("url")
+		canonical := publicapi.CanonicalRepo(url.ValueString())
+		if canonical == "" {
+			resp.Diagnostics.AddAttributeError(p, "Invalid repository URL", "url must not be blank.")
+			continue
+		}
+		if first, dup := seen[canonical]; dup {
+			resp.Diagnostics.AddAttributeError(p, "Duplicate repository", fmt.Sprintf("%q names the same repository as repos[%d]. List each repository once.", url.ValueString(), first))
+			continue
+		}
+		seen[canonical] = i
+	}
+}
+
+// environmentRepoURLs reports false when the list or any url in it is null or unknown.
+func environmentRepoURLs(list types.List) ([]string, bool) {
+	if list.IsNull() || list.IsUnknown() {
+		return nil, false
+	}
+	urls := make([]string, 0, len(list.Elements()))
+	for _, element := range list.Elements() {
+		url, ok := knownAttributes(element)["url"].(types.String)
+		if !ok || url.IsNull() || url.IsUnknown() {
+			return nil, false
+		}
+		urls = append(urls, url.ValueString())
+	}
+	return urls, true
+}
+
+// The comparison keeps order: whether the API gives meaning to the order of
+// repositories is not documented, so a reorder still replaces the environment.
+func environmentReposRequireReplace(_ context.Context, req planmodifier.ListRequest, resp *listplanmodifier.RequiresReplaceIfFuncResponse) {
+	state, stateKnown := environmentRepoURLs(req.StateValue)
+	plan, planKnown := environmentRepoURLs(req.PlanValue)
+	if !stateKnown || !planKnown || len(state) != len(plan) {
+		resp.RequiresReplace = true
+		return
+	}
+	for i := range plan {
+		if publicapi.CanonicalRepo(plan[i]) != publicapi.CanonicalRepo(state[i]) {
+			resp.RequiresReplace = true
+			return
+		}
 	}
 }
 
@@ -145,10 +227,14 @@ func (r *environmentResource) Create(ctx context.Context, req resource.CreateReq
 		resp.Diagnostics.AddError("Failed to create Cursor environment", err.Error())
 		return
 	}
-	if fresh, err := client.GetEnvironment(ctx, created.ID); err == nil {
-		created = fresh
+	if created.ID == "" {
+		resp.Diagnostics.AddError("Failed to create Cursor environment", fmt.Sprintf("The API accepted the environment and did not return its id. The environment may exist. Find the id of the %s environment named %q with the cursor_environments data source and import it before applying again.", plan.Owner.ValueString(), plan.Name.ValueString()))
+		return
 	}
-	state := environmentFromAPI(created, plan)
+	// State keeps the planned values, which Terraform requires after apply. A value
+	// the API stored differently shows up as drift on the next refresh.
+	state := plan
+	state.ID = types.StringValue(created.ID)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -176,6 +262,9 @@ func (r *environmentResource) Read(ctx context.Context, req resource.ReadRequest
 		resp.Diagnostics.AddWarning("Environment configuration is managed in git", fmt.Sprintf("This environment loads its configuration from %s in %s. That file is managed in git. The provider will not update it.", env.RepoFile.Path, env.RepoFile.URL))
 	}
 	next := environmentFromAPI(env, state)
+	if env.ID == "" {
+		next.ID = state.ID
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &next)...)
 }
 
@@ -191,21 +280,26 @@ func (r *environmentResource) Update(ctx context.Context, req resource.UpdateReq
 		resp.Diagnostics.AddError("Provider not configured", err.Error())
 		return
 	}
-	current, err := client.GetEnvironment(ctx, prior.ID.ValueString())
+	id := prior.ID.ValueString()
+	current, err := client.GetEnvironment(ctx, id)
 	if publicapi.IsNotFound(err) {
-		resp.State.RemoveResource(ctx)
+		// Terraform rejects an update that returns no state, so the deletion is
+		// reported here and the next refresh removes the resource.
+		resp.Diagnostics.AddError("Cursor environment no longer exists", fmt.Sprintf("Environment %s was deleted outside Terraform. Run terraform apply again to create it.", id))
 		return
 	}
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to read Cursor environment", err.Error())
 		return
 	}
-	if current.RepoFile != nil {
-		resp.Diagnostics.AddError("Environment configuration is managed in git", fmt.Sprintf("This environment loads its configuration from %s in %s. That file is managed in git. The provider will not PATCH it.", current.RepoFile.Path, current.RepoFile.URL))
+	// The API cannot change repositories, and the plan decided against replacement
+	// by comparing with state. State can be stale when refresh was skipped.
+	if !slices.Equal(canonicalRepoMultiset(environmentModelRepoURLs(plan.Repos)), canonicalRepoMultiset(environmentAPIRepoURLs(current.Repos))) {
+		resp.Diagnostics.AddAttributeError(path.Root("repos"), "Environment repositories changed outside Terraform", "The environment's repositories no longer match this plan, and the API cannot change them in place. Run terraform plan again; it will propose replacing the environment.")
 		return
 	}
 	patch := publicapi.UpdateEnvironmentRequest{}
-	if !plan.Name.Equal(prior.Name) {
+	if plan.Name.ValueString() != current.Name {
 		name := plan.Name.ValueString()
 		patch.Name = &name
 	}
@@ -216,17 +310,20 @@ func (r *environmentResource) Update(ctx context.Context, req resource.UpdateReq
 		patch.EnvironmentJSON = &planned
 	}
 	if patch.Name != nil || patch.EnvironmentJSON != nil {
-		if err := client.UpdateEnvironment(ctx, prior.ID.ValueString(), patch); err != nil {
+		if current.RepoFile != nil {
+			resp.Diagnostics.AddError("Environment configuration is managed in git", fmt.Sprintf("This environment loads its configuration from %s in %s. That file is managed in git. The provider will not PATCH it.", current.RepoFile.Path, current.RepoFile.URL))
+			return
+		}
+		if err := client.UpdateEnvironment(ctx, id, patch); err != nil {
 			resp.Diagnostics.AddError("Failed to update Cursor environment", err.Error())
 			return
 		}
 	}
-	fresh, err := client.GetEnvironment(ctx, prior.ID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Failed to read Cursor environment", err.Error())
-		return
-	}
-	state := environmentFromAPI(fresh, plan)
+	// The PATCH returns no body. State keeps the planned values rather than a read
+	// that may not reflect the write yet; a value the API stored differently shows
+	// up as drift on the next refresh.
+	state := plan
+	state.ID = prior.ID
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -247,32 +344,41 @@ func (r *environmentResource) Delete(ctx context.Context, req resource.DeleteReq
 }
 
 func (r *environmentResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	if req.ID == "" {
-		resp.Diagnostics.AddError("Invalid import ID", "Import an environment by its UUID.")
+	id := strings.TrimSpace(req.ID)
+	if id == "" || strings.ContainsAny(id, "/ \t") {
+		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Import an environment by its UUID, for example 8f14e45f-ceea-4e6b-9c3a-1d2e3f4a5b6c. Got %q.", req.ID))
 		return
 	}
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 }
 
 func (r *environmentResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() || r.client == nil || r.client.guardrails == nil || !r.client.guardrails.HasAllowedOwners {
 		return
 	}
-	var plan environmentModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	// repos is read as a framework value: the model's slice cannot hold an unknown list.
+	var repos types.List
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("repos"), &repos)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	var urls []string
-	for _, repo := range plan.Repos {
-		if repo.URL.IsUnknown() {
-			return
+	resp.Diagnostics.Append(checkEnvironmentOwnerGuardrail(r.client.guardrails, repos)...)
+}
+
+// Known urls are checked even when other urls are still unknown. Unknown urls are
+// checked when Terraform plans again during apply, where everything is known.
+func checkEnvironmentOwnerGuardrail(g *guardrailsConfig, repos types.List) diag.Diagnostics {
+	var diags diag.Diagnostics
+	for i, element := range knownElements(repos) {
+		url, ok := knownAttributes(element)["url"].(types.String)
+		if !ok || url.IsNull() || url.IsUnknown() {
+			continue
 		}
-		if !repo.URL.IsNull() {
-			urls = append(urls, repo.URL.ValueString())
+		if detail := g.ownerViolation("environment repository", url.ValueString()); detail != "" {
+			diags.AddAttributeError(path.Root("repos").AtListIndex(i).AtName("url"), "Repository owner is not allowed", detail)
 		}
 	}
-	resp.Diagnostics.Append(r.client.guardrails.checkOwners("environment repository", urls)...)
+	return diags
 }
 
 func requirePublic(client *apiClient) (*publicapi.Client, error) {
@@ -286,6 +392,22 @@ func repoWrites(repos []environmentRepoModel) []publicapi.EnvironmentRepo {
 	out := make([]publicapi.EnvironmentRepo, 0, len(repos))
 	for _, repo := range repos {
 		out = append(out, publicapi.EnvironmentRepo{URL: repo.URL.ValueString()})
+	}
+	return out
+}
+
+func environmentModelRepoURLs(repos []environmentRepoModel) []string {
+	out := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		out = append(out, repo.URL.ValueString())
+	}
+	return out
+}
+
+func environmentAPIRepoURLs(repos []publicapi.EnvironmentRepo) []string {
+	out := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		out = append(out, repo.URL)
 	}
 	return out
 }
