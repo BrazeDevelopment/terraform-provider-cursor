@@ -6,18 +6,37 @@ This provider exposes Cursor Platform workflows as Terraform resources. It talks
 
 Full documentation for the provider, resources, and data sources lives in [`docs/`](./docs) and on the Terraform Registry.
 
+This repository is Braze's fork of [cursor/terraform-provider-cursor](https://github.com/cursor/terraform-provider-cursor). It adds Cloud Agent environments, secrets, private worker pools, model access, spend controls, groups, a repository blocklist, and plan-time guardrails; see [Fork features](#fork-features). [`FORK.md`](./FORK.md) records every upstream file the fork edits.
+
 ## Installation
+
+The fork is published to Braze's private registry, not the public Terraform Registry. Type names match upstream, so moving an existing stack only changes the provider address.
 
 ```hcl
 terraform {
+  required_version = ">= 1.11.0"
+
   required_providers {
     cursor = {
-      source  = "cursor/cursor"
-      version = "~> 0.1"
+      source  = "tf.braze.com/braze/cursor"
+      version = "1.0.0"
     }
   }
 }
 ```
+
+`tf.braze.com` does not resolve in DNS. Map it to Artifactory in `~/.terraformrc` (or `~/.tofurc`), with Zscaler connected:
+
+```hcl
+host "tf.braze.com" {
+  services = {
+    "modules.v1"   = "https://arti.k8s.core-001.cp-use-1.braze.com/artifactory/api/terraform/terraform/v1/modules/"
+    "providers.v1" = "https://arti.k8s.core-001.cp-use-1.braze.com/artifactory/api/terraform/terraform/providers/"
+  }
+}
+```
+
+Move existing state from the upstream provider with `terraform state replace-provider registry.terraform.io/cursor/cursor tf.braze.com/braze/cursor`. Pin an exact version and commit `.terraform.lock.hcl`. Terraform or OpenTofu 1.11 or later is required because secret values use write-only attributes.
 
 ## Provider Configuration
 
@@ -135,6 +154,86 @@ resource "cursor_origin_repo_grant" "eng" {
   group_name = "Engineering"
 }
 ```
+
+## Fork features
+
+Each resource supports create, refresh, in-place update, destroy, and `terraform import`; the import format is on its docs page and in `examples/resources/<type>/import.sh`. Create refuses to take over an object that already exists and names the import id to use instead.
+
+| Area | Resources | Data sources | Credential |
+|---|---|---|---|
+| Cloud Agent environments | `cursor_environment` | `cursor_environment`, `cursor_environments`, `cursor_environment_active_build` | `api_key` |
+| Secrets | `cursor_environment_secret`, `cursor_team_secret` | | `api_key` |
+| Private worker pools | `cursor_private_worker_pool` | `cursor_private_worker_pools`, `cursor_private_workers_summary` | `pool_api_key` |
+| Model access | `cursor_model_access_configuration`, `cursor_model_access_provider`, `cursor_model_access_model` | `cursor_models` | `team_api_key` (model reads use `api_key`) |
+| Spend and repositories | `cursor_user_spend_limit`, `cursor_repo_blocklist` | | `team_api_key` |
+| Team directory groups | `cursor_team_directory_group`, `cursor_team_directory_group_members` | `cursor_team_members` | `team_api_key` |
+| Organization groups | `cursor_organization_group`, `cursor_organization_group_members` | | `organization_api_key` and `organization_id` |
+| Identity | | `cursor_api_key_info` | `api_key` |
+
+### Environments and secrets
+
+```hcl
+resource "cursor_environment" "web" {
+  owner = "team"
+  name  = "web"
+  repos = [{ url = "https://github.com/example-org/web" }]
+  environment_json = jsonencode({
+    install = "pnpm install"
+  })
+}
+
+variable "npm_token" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
+resource "cursor_team_secret" "npm" {
+  name             = "NPM_TOKEN"
+  type             = "runtime_secret"
+  repos            = ["example-org/web"]
+  value_wo         = var.npm_token
+  value_wo_version = 1
+}
+```
+
+Secret values are write-only: they are sent on create and update and never stored in state or plan files. Increase `value_wo_version` to rotate a value. Each secret resource manages one version of a name, and `repos` must list at least one repository, because an empty list grants every repository. Build Secrets cannot be created or changed through the API; one changed to a Build Secret outside Terraform can still be destroyed.
+
+Self-hosted pool workers use an environment's repository list only, and they receive team secrets only when Secret sync is on and the worker runs with `--sync-dashboard-secrets`.
+
+### Private worker pools
+
+```hcl
+resource "cursor_private_worker_pool" "gpu" {
+  scope                        = "team"
+  pool_name                    = "gpu"
+  worker_ready_timeout_seconds = 0
+}
+```
+
+Set `repo_owner` and `repo_name` for a repo-backed pool. The pools API accepts only a team service-account key.
+
+### Model access, spend, and groups
+
+Apply `cursor_model_access_configuration` before any provider or model resource: those routes return 409 until a custom policy exists. Destroying a provider or model disables it. Destroying the configuration is blocked while `deletion_protection` is true.
+
+`cursor_user_spend_limit` sets one member's monthly limit by email. Group resources take the `team_group_` or `g_` id, not the `grp_` public id. A members resource owns the group's entire member list, and ids the API ignores fail the apply.
+
+### Guardrails
+
+```hcl
+provider "cursor" {
+  guardrails {
+    allowed_automation_scopes = ["team"]
+    require_pool_label        = true
+    allowed_models            = ["composer-2"]
+    allowed_repo_owners       = ["example-org"]
+    deny_pr_approval          = true
+  }
+}
+```
+
+Guardrails fail the plan when an automation, environment, or repo-backed pool violates them. They run even when provider credentials are known only after apply, and they never block a destroy. Guardrail values must be known at plan time. They constrain only this provider, not launches from the dashboard or API, and `terraform import` does not run them.
 
 ## Development
 
