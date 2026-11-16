@@ -10,7 +10,7 @@ This repository is Braze's fork of [cursor/terraform-provider-cursor](https://gi
 
 ## Installation
 
-The fork is published to Braze's private registry, not the public Terraform Registry. Type names match upstream, so moving an existing stack only changes the provider address.
+The fork is published to a private registry, not the public Terraform Registry. Type names match upstream, so moving an existing stack only changes the provider address. The registry host and the CLI configuration that reaches it are in internal documentation; `<registry-host>` below stands for that host.
 
 ```hcl
 terraform {
@@ -18,25 +18,14 @@ terraform {
 
   required_providers {
     cursor = {
-      source  = "tf.braze.com/braze/cursor"
+      source  = "<registry-host>/braze/cursor"
       version = "1.0.0"
     }
   }
 }
 ```
 
-`tf.braze.com` does not resolve in DNS. Map it to Artifactory in `~/.terraformrc` (or `~/.tofurc`), with Zscaler connected:
-
-```hcl
-host "tf.braze.com" {
-  services = {
-    "modules.v1"   = "https://arti.k8s.core-001.cp-use-1.braze.com/artifactory/api/terraform/terraform/v1/modules/"
-    "providers.v1" = "https://arti.k8s.core-001.cp-use-1.braze.com/artifactory/api/terraform/terraform/providers/"
-  }
-}
-```
-
-Move existing state from the upstream provider with `terraform state replace-provider registry.terraform.io/cursor/cursor tf.braze.com/braze/cursor`. Pin an exact version and commit `.terraform.lock.hcl`. Terraform or OpenTofu 1.11 or later is required because secret values use write-only attributes.
+Move existing state from the upstream provider with `terraform state replace-provider registry.terraform.io/cursor/cursor <registry-host>/braze/cursor`. Pin an exact version and commit `.terraform.lock.hcl`. Terraform or OpenTofu 1.11 or later is required because secret values use write-only attributes.
 
 ## Provider Configuration
 

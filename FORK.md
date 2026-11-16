@@ -28,6 +28,10 @@ Upstream proposal: none yet. Remove the `POST` exception when upstream retries t
 
 Adds the fork introduction, the private registry installation, and the Fork features section. Upstream sections are unchanged, so a sync conflict here is limited to those additions.
 
+### `.github/workflows/release.yml`
+
+Removed. Upstream's workflow publishes a public GitHub release for the Terraform Registry on every `v*` tag. Fork releases are built from `.goreleaser.yml` and published to the private registry from a private pipeline. Keep the file deleted when an upstream sync changes it.
+
 `resource_platform_workflow.go` and `admin_client.go` are not edited. Guardrails for automations live in `internal/provider/fork_guardrails.go`.
 
 ## New packages and files
